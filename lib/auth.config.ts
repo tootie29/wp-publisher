@@ -22,6 +22,7 @@ declare module 'next-auth/jwt' {
 type _Augmented = JWT;
 
 export const authConfig = {
+  trustHost: true,
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID,
