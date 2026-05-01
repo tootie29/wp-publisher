@@ -18,7 +18,7 @@ export function htmlToBlocks(html: string): string {
   if (!html || !html.trim()) return '';
 
   // Wrap in a root element so cheerio can iterate top-level children.
-  const $ = cheerio.load(`<div id="__root">${html}</div>`, { decodeEntities: false });
+  const $ = cheerio.load(`<div id="__root">${html}</div>`);
   const root = $('#__root').first();
 
   flattenInlineWrappers($, root);
