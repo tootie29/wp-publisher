@@ -19,8 +19,13 @@ export default auth((req) => {
   }
 
   if (!req.auth) {
-    const url = req.nextUrl.clone();
-    url.pathname = '/login';
+    // Build the redirect off NEXTAUTH_URL when set so we never accidentally
+    // emit http:// behind a TLS-terminating proxy that strips X-Forwarded-Proto
+    // (e.g. LiteSpeed/Passenger on cPanel).
+    const base =
+      process.env.NEXTAUTH_URL ||
+      `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+    const url = new URL('/login', base);
     if (pathname !== '/') url.searchParams.set('callbackUrl', pathname);
     return NextResponse.redirect(url);
   }
