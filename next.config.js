@@ -3,6 +3,10 @@ const path = require('path');
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // LiteSpeed/Apache on cPanel adds a trailing slash for any URL that matches
+  // a folder name in the document root (e.g. /wp-publisher → /wp-publisher/).
+  // Match that behavior here so we don't ping-pong with the proxy.
+  trailingSlash: true,
   // Skip on-build type/lint checks. Type errors block production builds even
   // when the runtime would work fine. Run `tsc --noEmit` + `next lint`
   // locally before pushing.
