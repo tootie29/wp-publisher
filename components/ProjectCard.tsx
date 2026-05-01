@@ -110,8 +110,8 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
   const [surferSession, setSurferSession] = useState<{ loggedIn: boolean; detail: string } | null>(null);
   const [surferLoading, setSurferLoading] = useState(false);
   const [connector, setConnector] = useState<{
-    surfer: { connected: boolean; ageSeconds?: number };
-    frase: { connected: boolean; ageSeconds?: number };
+    surfer: { connected: boolean; ageSeconds?: number; localStorageKeys?: number };
+    frase: { connected: boolean; ageSeconds?: number; localStorageKeys?: number };
   } | null>(null);
   const [wpPublished, setWpPublished] = useState<WpPublishedRow[] | null>(null);
   const [wpPublishedError, setWpPublishedError] = useState<string | null>(null);
@@ -1001,17 +1001,21 @@ function ConnectorPill({
   onDisconnect,
 }: {
   label: string;
-  info?: { connected: boolean; ageSeconds?: number };
+  info?: { connected: boolean; ageSeconds?: number; localStorageKeys?: number };
   onDisconnect: () => void;
 }) {
   const ageMin = info?.ageSeconds ? Math.floor(info.ageSeconds / 60) : 0;
-  const ageText = !info?.connected
+  const lsKeys = info?.localStorageKeys ?? 0;
+  const baseText = !info?.connected
     ? 'Not connected'
     : ageMin < 1
     ? 'Connected · just refreshed'
     : ageMin < 60
     ? `Connected · refreshed ${ageMin}m ago`
     : `Connected · refreshed ${Math.floor(ageMin / 60)}h ago`;
+  const ageText = info?.connected
+    ? `${baseText} · ${lsKeys} localStorage ${lsKeys === 1 ? 'key' : 'keys'}`
+    : baseText;
 
   return (
     <div

@@ -317,6 +317,11 @@ async function extractWithConnectorCookies(
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 1400, height: 900 },
+    // Match a real Chrome UA so SaaS bot-detection (Frase, etc.) doesn't
+    // immediately throw the session out.
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   });
 
   // Map cookie sameSite values from the extension format to Playwright's.
