@@ -459,17 +459,18 @@ async function extractViaExtensionFetch(
   source: 'surfer' | 'frase'
 ): Promise<ExtractedContent> {
   const { enqueueFetch } = await import('./fetch-queue');
-  const html = await enqueueFetch(url, source);
+  const { html, title: extTitle } = await enqueueFetch(url, source);
 
-  // Pull out a title from the HTML and use the body as-is (the extractor
-  // tables run after this and serialize to Gutenberg blocks).
-  const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const stripTags = (s: string) => s.replace(/<[^>]+>/g, '').trim();
-  const title =
-    (titleMatch && stripTags(titleMatch[1])) ||
-    (titleTag && stripTags(titleTag[1]).split(/[–|-]/)[0].trim()) ||
-    'Untitled';
+  let title = (extTitle || '').trim();
+  if (!title) {
+    const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+    const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const stripTags = (s: string) => s.replace(/<[^>]+>/g, '').trim();
+    title =
+      (titleMatch && stripTags(titleMatch[1])) ||
+      (titleTag && stripTags(titleTag[1]).split(/[–|-]/)[0].trim()) ||
+      'Untitled';
+  }
 
   return { title, htmlBody: html, sourceType: source };
 }

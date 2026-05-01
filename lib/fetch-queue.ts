@@ -8,12 +8,17 @@ import crypto from 'node:crypto';
 
 export type FetchSource = 'surfer' | 'frase';
 
+export interface FetchResult {
+  html: string;
+  title?: string;
+}
+
 interface Job {
   id: string;
   url: string;
   source: FetchSource;
   createdAt: number;
-  resolve: (html: string) => void;
+  resolve: (r: FetchResult) => void;
   reject: (e: Error) => void;
   takenAt?: number;
 }
@@ -34,7 +39,7 @@ function getStore(): { jobs: Map<string, Job>; pending: Job[] } {
 
 const TIMEOUT_MS = 60_000;
 
-export function enqueueFetch(url: string, source: FetchSource): Promise<string> {
+export function enqueueFetch(url: string, source: FetchSource): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
     const store = getStore();
     const id = crypto.randomUUID();
@@ -78,13 +83,18 @@ export function takeNextJob(): { id: string; url: string; source: FetchSource } 
   return null;
 }
 
-export function completeJob(id: string, html?: string, error?: string): boolean {
+export function completeJob(
+  id: string,
+  html?: string,
+  error?: string,
+  title?: string
+): boolean {
   const store = getStore();
   const job = store.jobs.get(id);
   if (!job) return false;
   store.jobs.delete(id);
   if (error) job.reject(new Error(error));
-  else if (typeof html === 'string' && html.length > 0) job.resolve(html);
+  else if (typeof html === 'string' && html.length > 0) job.resolve({ html, title });
   else job.reject(new Error('Empty response from extension'));
   return true;
 }

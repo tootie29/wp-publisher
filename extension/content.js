@@ -27,6 +27,7 @@ async function pollOnce() {
   if (!job?.id || !job?.url) return;
 
   let html = '';
+  let title = '';
   let error = '';
   try {
     const result = await chrome.runtime.sendMessage({
@@ -35,8 +36,10 @@ async function pollOnce() {
       source: job.source,
     });
     if (result?.error) error = result.error;
-    else if (typeof result?.html === 'string') html = result.html;
-    else error = 'No response from background worker';
+    else if (typeof result?.html === 'string') {
+      html = result.html;
+      title = result.title || '';
+    } else error = 'No response from background worker';
   } catch (e) {
     error = e?.message || String(e);
   }
@@ -46,7 +49,7 @@ async function pollOnce() {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html, error: error || undefined }),
+      body: JSON.stringify({ html, title, error: error || undefined }),
     });
   } catch {
     // Server-side timeout will eventually clean it up.

@@ -14,9 +14,10 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
   const body = (await req.json().catch(() => ({}))) as {
     html?: string;
+    title?: string;
     error?: string;
   };
-  const ok = completeJob(params.id, body.html, body.error);
+  const ok = completeJob(params.id, body.html, body.error, body.title);
   if (!ok) {
     return NextResponse.json({ ok: false, error: 'Unknown or expired job' }, { status: 404 });
   }
