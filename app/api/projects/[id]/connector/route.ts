@@ -46,7 +46,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: 'Invalid source' }, { status: 400 });
   }
 
-  let body: { cookies?: ConnectorCookie[] };
+  let body: {
+    cookies?: ConnectorCookie[];
+    localStorage?: Record<string, string>;
+    sessionStorage?: Record<string, string>;
+  };
   try {
     body = await req.json();
   } catch {
@@ -56,8 +60,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: 'No cookies provided' }, { status: 400 });
   }
 
-  saveCookies(params.id, source, body.cookies);
-  return NextResponse.json({ ok: true, source, count: body.cookies.length });
+  saveCookies(params.id, source, body.cookies, body.localStorage, body.sessionStorage);
+  return NextResponse.json({
+    ok: true,
+    source,
+    count: body.cookies.length,
+    localStorageKeys: body.localStorage ? Object.keys(body.localStorage).length : 0,
+  });
 }
 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {

@@ -22,6 +22,8 @@ export interface ConnectorCookie {
 export interface ConnectorRecord {
   source: ConnectorSource;
   cookies: ConnectorCookie[];
+  localStorage?: Record<string, string>;
+  sessionStorage?: Record<string, string>;
   savedAt: string;
 }
 
@@ -57,13 +59,17 @@ function getKey(): Buffer {
 export function saveCookies(
   projectId: string,
   source: ConnectorSource,
-  cookies: ConnectorCookie[]
+  cookies: ConnectorCookie[],
+  localStorage?: Record<string, string>,
+  sessionStorage?: Record<string, string>
 ): void {
   fs.mkdirSync(dirFor(projectId), { recursive: true });
 
   const record: ConnectorRecord = {
     source,
     cookies,
+    localStorage: localStorage && Object.keys(localStorage).length ? localStorage : undefined,
+    sessionStorage: sessionStorage && Object.keys(sessionStorage).length ? sessionStorage : undefined,
     savedAt: new Date().toISOString(),
   };
 
@@ -123,9 +129,19 @@ export function statusFor(projectId: string): {
 function oneStatus(
   projectId: string,
   source: ConnectorSource
-): { connected: boolean; ageSeconds?: number; cookieCount?: number } {
+): {
+  connected: boolean;
+  ageSeconds?: number;
+  cookieCount?: number;
+  localStorageKeys?: number;
+} {
   const r = loadCookies(projectId, source);
   if (!r) return { connected: false };
   const ageSeconds = Math.floor((Date.now() - new Date(r.savedAt).getTime()) / 1000);
-  return { connected: true, ageSeconds, cookieCount: r.cookies.length };
+  return {
+    connected: true,
+    ageSeconds,
+    cookieCount: r.cookies.length,
+    localStorageKeys: r.localStorage ? Object.keys(r.localStorage).length : 0,
+  };
 }

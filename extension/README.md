@@ -14,9 +14,10 @@ A small extension that lets the WP Publisher dashboard read your Surfer SEO and 
 
 1. Sign in to the dashboard at `http://localhost:3030` (or your deployed URL — change it in the extension's popup → "App URL" if needed).
 2. Sign in to **Surfer SEO** and/or **Frase** in the same Chrome profile (just like you normally would).
-3. Open a project page in the dashboard: `…/wp-publisher/{your-project-id}`.
-4. Click the extension icon → **Connect Surfer** and/or **Connect Frase**.
-5. The popup will show "Connected" — that project can now extract Surfer/Frase content on the server.
+3. **Keep the Surfer/Frase tab open** while connecting — the extension reads `localStorage` from that tab (Frase's session lives there, not in cookies).
+4. Open a project page in the dashboard: `…/wp-publisher/{your-project-id}`.
+5. Click the extension icon → **Connect Surfer** and/or **Connect Frase**.
+6. The popup will show "Connected · X cookies, Y localStorage keys" — that project can now extract content on the server.
 
 ## What it does
 

@@ -3,7 +3,7 @@
   "name": "WP Publisher Connector",
   "version": "0.1.0",
   "description": "Lets the WP Publisher dashboard read Surfer SEO and Frase articles using your existing browser login. No passwords, no scraping.",
-  "permissions": ["cookies", "storage", "activeTab"],
+  "permissions": ["cookies", "storage", "activeTab", "tabs", "scripting"],
   "host_permissions": [
     "*://*.surferseo.com/*",
     "*://*.frase.io/*",

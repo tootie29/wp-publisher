@@ -4,8 +4,16 @@
 // server-side extraction. Nothing is sent anywhere except your own dashboard.
 
 const SOURCES = {
-  surfer: { domains: ['.surferseo.com', 'app.surferseo.com', 'surferseo.com'], label: 'Surfer SEO' },
-  frase: { domains: ['.frase.io', 'app.frase.io', 'frase.io'], label: 'Frase' },
+  surfer: {
+    domains: ['.surferseo.com', 'app.surferseo.com', 'surferseo.com'],
+    matchPatterns: ['*://*.surferseo.com/*'],
+    label: 'Surfer SEO',
+  },
+  frase: {
+    domains: ['.frase.io', 'app.frase.io', 'frase.io'],
+    matchPatterns: ['*://*.frase.io/*'],
+    label: 'Frase',
+  },
 };
 
 const els = {
@@ -130,24 +138,68 @@ async function connect(source) {
     if (!cookies.length) {
       throw new Error(`No ${SOURCES[source].label} cookies found. Make sure you're logged in to ${SOURCES[source].label} in this Chrome profile, then try again.`);
     }
+
+    // Some apps (Frase, anything Auth0-backed) keep the access token in
+    // localStorage rather than cookies. Find an open tab for the source's
+    // origin and read both localStorage and sessionStorage.
+    const storage = await collectStorage(SOURCES[source].matchPatterns);
+
     const res = await fetch(
       `${state.appUrl}/api/projects/${state.projectId}/connector?source=${source}`,
       {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookies }),
+        body: JSON.stringify({ cookies, ...storage }),
       }
     );
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    toast(`${SOURCES[source].label} connected.`, 'ok');
+    const lsCount = storage.localStorage ? Object.keys(storage.localStorage).length : 0;
+    toast(
+      `${SOURCES[source].label} connected. ${cookies.length} cookies, ${lsCount} localStorage keys.`,
+      'ok'
+    );
     await refreshStatus();
   } catch (e) {
     toast(`Failed: ${e.message}`, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = original;
+  }
+}
+
+// Find an open tab for the source's origin and read localStorage +
+// sessionStorage. If no tab is open, returns empty objects (cookies alone
+// will be saved — works for Surfer, may not work for Frase).
+async function collectStorage(matchPatterns) {
+  try {
+    const tabs = await chrome.tabs.query({ url: matchPatterns });
+    const tab = tabs.find((t) => t.id);
+    if (!tab) return { localStorage: {}, sessionStorage: {} };
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const ls = {};
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i);
+          if (k != null) ls[k] = window.localStorage.getItem(k);
+        }
+        const ss = {};
+        for (let i = 0; i < window.sessionStorage.length; i++) {
+          const k = window.sessionStorage.key(i);
+          if (k != null) ss[k] = window.sessionStorage.getItem(k);
+        }
+        return { localStorage: ls, sessionStorage: ss };
+      },
+    });
+    const r = results[0]?.result;
+    return r || { localStorage: {}, sessionStorage: {} };
+  } catch (e) {
+    // If we can't read storage (e.g., no scripting permission yet), fall
+    // back to cookies-only without failing the whole connect.
+    return { localStorage: {}, sessionStorage: {} };
   }
 }
 

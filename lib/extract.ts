@@ -340,6 +340,28 @@ async function extractWithConnectorCookies(
   });
   await context.addCookies(playwrightCookies as never);
 
+  // Populate localStorage / sessionStorage before any page script runs.
+  // Frase / any Auth0-backed SPA stashes the JWT here, not in cookies.
+  const lsEntries = record.localStorage || {};
+  const ssEntries = record.sessionStorage || {};
+  if (Object.keys(lsEntries).length || Object.keys(ssEntries).length) {
+    await context.addInitScript(
+      ([ls, ss]: [Record<string, string>, Record<string, string>]) => {
+        try {
+          for (const [k, v] of Object.entries(ls || {})) {
+            window.localStorage.setItem(k, v);
+          }
+        } catch {}
+        try {
+          for (const [k, v] of Object.entries(ss || {})) {
+            window.sessionStorage.setItem(k, v);
+          }
+        } catch {}
+      },
+      [lsEntries, ssEntries] as [Record<string, string>, Record<string, string>]
+    );
+  }
+
   try {
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
