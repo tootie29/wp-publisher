@@ -451,6 +451,29 @@ export async function extractFromFraseViaConnector(projectId: string, url: strin
   return extractWithConnectorCookies(projectId, url, 'frase');
 }
 
+// Newer path — outsource the actual fetch to the user's authenticated browser
+// via the WP Publisher Connector extension. Used when server-side replay
+// (cookies + localStorage in headless Playwright) gets bot-detected.
+async function extractViaExtensionFetch(
+  url: string,
+  source: 'surfer' | 'frase'
+): Promise<ExtractedContent> {
+  const { enqueueFetch } = await import('./fetch-queue');
+  const html = await enqueueFetch(url, source);
+
+  // Pull out a title from the HTML and use the body as-is (the extractor
+  // tables run after this and serialize to Gutenberg blocks).
+  const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const stripTags = (s: string) => s.replace(/<[^>]+>/g, '').trim();
+  const title =
+    (titleMatch && stripTags(titleMatch[1])) ||
+    (titleTag && stripTags(titleTag[1]).split(/[–|-]/)[0].trim()) ||
+    'Untitled';
+
+  return { title, htmlBody: html, sourceType: source };
+}
+
 export async function extractContent(
   projectId: string,
   url: string
@@ -472,13 +495,9 @@ export async function extractContent(
   }
 
   if (kind === 'frase') {
-    const { loadCookies } = await import('./connector');
-    if (loadCookies(projectId, 'frase')) {
-      return extractFromFraseViaConnector(projectId, url);
-    }
-    throw new Error(
-      'No Frase connection. Install the WP Publisher Connector extension and click "Connect Frase" on this project page.'
-    );
+    // Frase aggressively bot-detects headless Chromium even with full cookie
+    // + localStorage replay, so always go through the extension fetch path.
+    return extractViaExtensionFetch(url, 'frase');
   }
 
   throw new Error(`Don't know how to extract from ${url}`);

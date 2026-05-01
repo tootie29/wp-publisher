@@ -16,5 +16,18 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "WP Publisher Connector"
-  }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost:3030/*",
+        "https://wp-publisher.entrsolutions.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
