@@ -238,12 +238,15 @@ export async function extractFromSurfer(
         'article',
       ];
 
-      let best: { el: Element; len: number } | null = null;
+      type Pick = { el: Element; len: number };
+      let best: Pick | null = null;
       for (const sel of candidates) {
-        document.querySelectorAll(sel).forEach((el) => {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
           const len = (el as HTMLElement).innerText?.trim().length || 0;
-          if (len > (best?.len || 0)) best = { el, len };
-        });
+          const current: Pick | null = best;
+          if (len > (current?.len || 0)) best = { el, len };
+        }
       }
 
       const titleEl = document.querySelector('h1');
@@ -252,11 +255,12 @@ export async function extractFromSurfer(
         document.title.split(/[–|-]/)[0].trim() ||
         'Untitled';
 
+      const picked: Pick | null = best;
       return {
         title,
-        html: best ? (best.el as HTMLElement).innerHTML : '',
-        found: !!best,
-        candidateCount: best?.len || 0,
+        html: picked ? (picked.el as HTMLElement).innerHTML : '',
+        found: !!picked,
+        candidateCount: picked?.len || 0,
       };
     });
 
@@ -358,23 +362,27 @@ async function extractWithConnectorCookies(
         'main [role="document"]',
         'article',
       ];
-      let best: { el: Element; len: number } | null = null;
+      type Pick = { el: Element; len: number };
+      let best: Pick | null = null;
       for (const sel of candidates) {
-        document.querySelectorAll(sel).forEach((el) => {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
           const len = (el as HTMLElement).innerText?.trim().length || 0;
-          if (len > (best?.len || 0)) best = { el, len };
-        });
+          const current: Pick | null = best;
+          if (len > (current?.len || 0)) best = { el, len };
+        }
       }
       const titleEl = document.querySelector('h1');
       const title =
         titleEl?.textContent?.trim() ||
         document.title.split(/[–|-]/)[0].trim() ||
         'Untitled';
+      const picked: Pick | null = best;
       return {
         title,
-        html: best ? (best.el as HTMLElement).innerHTML : '',
-        found: !!best,
-        len: best?.len || 0,
+        html: picked ? (picked.el as HTMLElement).innerHTML : '',
+        found: !!picked,
+        len: picked?.len || 0,
       };
     });
 
