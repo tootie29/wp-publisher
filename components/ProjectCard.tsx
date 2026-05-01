@@ -55,6 +55,7 @@ interface PublishedItem {
   processedAt: string; title: string; pageType: string;
   route: 'post' | 'page'; primaryKeyword: string;
   status: 'success' | 'partial';
+  currentStatus?: 'draft' | 'publish' | 'pending' | 'private' | 'future' | 'trash' | 'unknown';
 }
 
 interface RunSummary {
@@ -563,7 +564,11 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
           Queue {queue && queue.length > 0 ? `(${queue.length})` : ''}
         </TabButton>
         <TabButton active={tab === 'drafts'} onClick={() => setTab('drafts')}>
-          Drafts {published && published.length > 0 ? `(${published.length})` : ''}
+          Drafts {(() => {
+            if (!published) return '';
+            const drafts = published.filter((p) => !p.currentStatus || p.currentStatus === 'draft' || p.currentStatus === 'unknown');
+            return drafts.length > 0 ? `(${drafts.length})` : '';
+          })()}
         </TabButton>
         <TabButton active={tab === 'published'} onClick={() => setTab('published')}>
           Published {wpPublished && wpPublished.length > 0 ? `(${wpPublished.length})` : ''}
@@ -732,23 +737,46 @@ function QueueTable({
 
 function DraftsTable({ published }: { published: PublishedItem[] | null }) {
   const [q, setQ] = useState('');
-  const filtered = useMemo(() => {
+
+  // Only items that are still draft (or unknown — keep showing those so we
+  // don't hide rows when the WP status check failed). Anything in 'publish',
+  // 'pending', 'private', 'future', 'trash' has left this tab.
+  const drafts = useMemo(() => {
     if (!published) return null;
+    return published.filter(
+      (p) => !p.currentStatus || p.currentStatus === 'draft' || p.currentStatus === 'unknown'
+    );
+  }, [published]);
+  const movedOutCount = published && drafts ? published.length - drafts.length : 0;
+
+  const filtered = useMemo(() => {
+    if (!drafts) return null;
     const needle = q.trim().toLowerCase();
-    if (!needle) return published;
-    return published.filter((p) =>
+    if (!needle) return drafts;
+    return drafts.filter((p) =>
       (p.title || '').toLowerCase().includes(needle) ||
       (p.primaryKeyword || '').toLowerCase().includes(needle) ||
       (p.pageType || '').toLowerCase().includes(needle) ||
       (p.route || '').toLowerCase().includes(needle) ||
       String(p.rowIndex).includes(needle)
     );
-  }, [published, q]);
+  }, [drafts, q]);
 
   if (published === null) {
     return (
       <div className="text-white/40 text-sm py-8 text-center inline-flex items-center justify-center gap-2 w-full">
         <Loader2 className="w-4 h-4 animate-spin" /> Loading drafts…
+      </div>
+    );
+  }
+  if (drafts && drafts.length === 0 && movedOutCount > 0) {
+    return (
+      <div className="py-10 text-center">
+        <CheckCircle2 className="w-8 h-8 text-emerald-400/70 mx-auto mb-3" />
+        <div className="text-white/70 text-sm font-medium">All drafts have been published</div>
+        <div className="text-white/40 text-xs mt-1">
+          {movedOutCount} {movedOutCount === 1 ? 'item is' : 'items are'} live in WordPress now — see the <span className="text-emerald-300">Published</span> tab.
+        </div>
       </div>
     );
   }
@@ -769,8 +797,14 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
         value={q}
         onChange={setQ}
         placeholder="Search drafts by title, keyword, page type, or row #…"
-        resultLabel={filtered && q ? `${filtered.length} of ${published.length}` : undefined}
+        resultLabel={filtered && q && drafts ? `${filtered.length} of ${drafts.length}` : undefined}
       />
+      {movedOutCount > 0 && (
+        <div className="text-xs text-white/45 mb-3 inline-flex items-center gap-1.5">
+          <CheckCircle2 className="w-3 h-3 text-emerald-400/80" />
+          {movedOutCount} {movedOutCount === 1 ? 'draft has' : 'drafts have'} been published in WordPress and moved to the <span className="text-emerald-300">Published</span> tab.
+        </div>
+      )}
       {filtered && filtered.length === 0 ? (
         <div className="text-white/40 text-xs py-6 text-center">No drafts match "{q}".</div>
       ) : (
