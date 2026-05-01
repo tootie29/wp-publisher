@@ -12,7 +12,7 @@
 
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
-import type { Element } from 'domhandler';
+import type { AnyNode } from 'domhandler';
 
 export function htmlToBlocks(html: string): string {
   if (!html || !html.trim()) return '';
@@ -36,7 +36,7 @@ export function htmlToBlocks(html: string): string {
 
 // Many sources wrap content in <div>/<section>/<article> shells. Unwrap them
 // so we serialize the actual block-level children.
-function flattenInlineWrappers($: CheerioAPI, root: Cheerio<Element>): void {
+function flattenInlineWrappers($: CheerioAPI, root: Cheerio<AnyNode>): void {
   // Walk a few times — wrappers can be nested.
   for (let i = 0; i < 5; i++) {
     const wrappers = root.find('> div, > section, > article').toArray();
@@ -47,7 +47,7 @@ function flattenInlineWrappers($: CheerioAPI, root: Cheerio<Element>): void {
   }
 }
 
-function serializeNode($: CheerioAPI, $el: Cheerio<Element>): string {
+function serializeNode($: CheerioAPI, $el: Cheerio<AnyNode>): string {
   const tag = ($el.prop('tagName') || '').toLowerCase();
   if (!tag) return '';
 
@@ -117,7 +117,7 @@ function serializeNode($: CheerioAPI, $el: Cheerio<Element>): string {
   }
 }
 
-function headingBlock($el: Cheerio<Element>, level: number): string {
+function headingBlock($el: Cheerio<AnyNode>, level: number): string {
   const safeLevel = Math.min(Math.max(level, 1), 6);
   const inner = $el.html()?.trim() || '';
   if (!inner) return '';
@@ -125,7 +125,7 @@ function headingBlock($el: Cheerio<Element>, level: number): string {
   return `<!-- wp:heading${attrs} --><h${safeLevel} class="wp-block-heading">${inner}</h${safeLevel}><!-- /wp:heading -->`;
 }
 
-function listBlock($: CheerioAPI, $el: Cheerio<Element>, ordered: boolean): string {
+function listBlock($: CheerioAPI, $el: Cheerio<AnyNode>, ordered: boolean): string {
   const items: string[] = [];
   $el.children('li').each((_, li) => {
     const $li = $(li);
@@ -152,11 +152,11 @@ function wrap(name: string, inner: string): string {
   return `<!-- wp:${name} -->${inner}<!-- /wp:${name} -->`;
 }
 
-function innerHtml($: CheerioAPI, $el: Cheerio<Element>): string {
+function innerHtml($: CheerioAPI, $el: Cheerio<AnyNode>): string {
   return $el.html() || '';
 }
 
-function textOf($el: Cheerio<Element>): string {
+function textOf($el: Cheerio<AnyNode>): string {
   return $el.text() || '';
 }
 
