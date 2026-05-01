@@ -16,7 +16,6 @@ const nextConfig = {
     serverActions: {
       allowedOrigins: ['localhost:3030', 'wp-publisher.entrsolutions.com'],
     },
-    serverComponentsExternalPackages: ['better-sqlite3'],
     cpus: 1,
     workerThreads: false,
   },

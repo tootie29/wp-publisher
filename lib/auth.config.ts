@@ -32,15 +32,9 @@ export const authConfig = {
   session: { strategy: 'jwt' },
   pages: { signIn: '/login' },
   callbacks: {
-    async jwt({ token, user }) {
-      if (user && (user as { appUserId?: string }).appUserId) {
-        token.appUserId = (user as { appUserId?: string }).appUserId;
-      }
-      return token;
-    },
     async session({ session, token }) {
-      if (token.appUserId && session.user) {
-        session.user.id = token.appUserId;
+      if (token.sub && session.user) {
+        session.user.id = token.sub;
       }
       return session;
     },
