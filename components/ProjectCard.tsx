@@ -566,7 +566,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
         <TabButton active={tab === 'drafts'} onClick={() => setTab('drafts')}>
           Drafts {(() => {
             if (!published) return '';
-            const drafts = published.filter((p) => !p.currentStatus || p.currentStatus === 'draft' || p.currentStatus === 'unknown');
+            const drafts = published.filter((p) => p.currentStatus === 'draft');
             return drafts.length > 0 ? `(${drafts.length})` : '';
           })()}
         </TabButton>
@@ -738,16 +738,29 @@ function QueueTable({
 function DraftsTable({ published }: { published: PublishedItem[] | null }) {
   const [q, setQ] = useState('');
 
-  // Only items that are still draft (or unknown — keep showing those so we
-  // don't hide rows when the WP status check failed). Anything in 'publish',
-  // 'pending', 'private', 'future', 'trash' has left this tab.
+  // Strict: only show items whose current WordPress status is "draft".
+  // Anything else (publish, pending, private, future, trash, deleted/unknown)
+  // is hidden — those rows belong on the Published tab or have been removed
+  // from WP altogether.
   const drafts = useMemo(() => {
     if (!published) return null;
-    return published.filter(
-      (p) => !p.currentStatus || p.currentStatus === 'draft' || p.currentStatus === 'unknown'
-    );
+    return published.filter((p) => p.currentStatus === 'draft');
   }, [published]);
-  const movedOutCount = published && drafts ? published.length - drafts.length : 0;
+  const movedOutCount = useMemo(() => {
+    if (!published) return 0;
+    return published.filter(
+      (p) =>
+        p.currentStatus &&
+        p.currentStatus !== 'draft' &&
+        p.currentStatus !== 'unknown'
+    ).length;
+  }, [published]);
+  const goneCount = useMemo(() => {
+    if (!published) return 0;
+    return published.filter(
+      (p) => p.currentStatus === 'unknown' || p.currentStatus === 'trash'
+    ).length;
+  }, [published]);
 
   const filtered = useMemo(() => {
     if (!drafts) return null;
@@ -799,10 +812,20 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
         placeholder="Search drafts by title, keyword, page type, or row #…"
         resultLabel={filtered && q && drafts ? `${filtered.length} of ${drafts.length}` : undefined}
       />
-      {movedOutCount > 0 && (
-        <div className="text-xs text-white/45 mb-3 inline-flex items-center gap-1.5">
-          <CheckCircle2 className="w-3 h-3 text-emerald-400/80" />
-          {movedOutCount} {movedOutCount === 1 ? 'draft has' : 'drafts have'} been published in WordPress and moved to the <span className="text-emerald-300">Published</span> tab.
+      {(movedOutCount > 0 || goneCount > 0) && (
+        <div className="text-xs text-white/45 mb-3 flex flex-col gap-1">
+          {movedOutCount > 0 && (
+            <span className="inline-flex items-center gap-1.5">
+              <CheckCircle2 className="w-3 h-3 text-emerald-400/80" />
+              {movedOutCount} {movedOutCount === 1 ? 'item is' : 'items are'} now in a non-draft status in WordPress — see the <span className="text-emerald-300">Published</span> tab.
+            </span>
+          )}
+          {goneCount > 0 && (
+            <span className="inline-flex items-center gap-1.5">
+              <AlertTriangle className="w-3 h-3 text-amber-400/80" />
+              {goneCount} {goneCount === 1 ? 'item was' : 'items were'} removed in WordPress (trashed or deleted). They'll be re-published on the next run.
+            </span>
+          )}
         </div>
       )}
       {filtered && filtered.length === 0 ? (
