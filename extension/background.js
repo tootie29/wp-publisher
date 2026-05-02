@@ -104,31 +104,101 @@ function sleep(ms) {
 }
 
 // Runs in the target tab's page context.
+// Picks the most specific article-body element and strips UI cruft from it.
 function scrapeArticle() {
-  const candidates = [
+  // Most specific → least specific. We take the FIRST viable hit per selector
+  // and stop, so picking up the editor body is preferred over the whole page.
+  const selectors = [
     '.ProseMirror',
+    '.tiptap.ProseMirror',
+    '[role="textbox"][contenteditable="true"]',
     '[contenteditable="true"]',
-    '[data-testid*="editor"]',
-    '[data-testid*="content"]',
-    'main [role="document"]',
+    '[data-testid="editor-content"]',
+    '[data-testid="document-content"]',
+    'main article',
     'article',
-    'main',
   ];
-  let best = null;
-  for (const sel of candidates) {
-    document.querySelectorAll(sel).forEach((el) => {
-      const len = (el.innerText || '').trim().length;
-      if (len > (best?.len || 0)) best = { el, len };
-    });
+
+  let chosen = null;
+  for (const sel of selectors) {
+    const els = Array.from(document.querySelectorAll(sel));
+    for (const el of els) {
+      const text = (el.innerText || '').trim();
+      if (text.length < 100) continue;
+      chosen = el;
+      break;
+    }
+    if (chosen) break;
   }
-  const titleEl = document.querySelector('h1');
+  if (!chosen) return { title: 'Untitled', html: '', length: 0 };
+
+  // Clone so we can clean it without touching the live page.
+  const clone = chosen.cloneNode(true);
+
+  // Strip UI chrome that creeps in around / inside the editor.
+  const cruftSelectors = [
+    'button',
+    'svg',
+    'script',
+    'style',
+    'noscript',
+    'iframe',
+    'input',
+    'textarea',
+    'select',
+    '[role="toolbar"]',
+    '[role="menu"]',
+    '[role="menuitem"]',
+    '[role="tablist"]',
+    '[role="tab"]',
+    '[aria-haspopup]',
+    '[contenteditable="false"]',
+    '[data-testid*="toolbar"]',
+    '[data-testid*="menu"]',
+    '[data-testid*="sidebar"]',
+    '[data-testid*="header"]',
+    '[data-testid*="footer"]',
+    '.toolbar',
+    '.menu',
+    '.sidebar',
+    'header',
+    'footer',
+    'nav',
+    'aside',
+  ];
+  clone
+    .querySelectorAll(cruftSelectors.join(','))
+    .forEach((n) => n.remove());
+
+  // Strip Tailwind-style class spam — the kept tags are still useful, but the
+  // 80-class strings make the WP draft unreadable.
+  clone.querySelectorAll('*').forEach((n) => {
+    if (n.removeAttribute) {
+      n.removeAttribute('class');
+      n.removeAttribute('style');
+      n.removeAttribute('data-state');
+      n.removeAttribute('data-testid');
+      n.removeAttribute('data-radix-collection-item');
+      n.removeAttribute('aria-label');
+      n.removeAttribute('aria-expanded');
+      n.removeAttribute('aria-controls');
+      n.removeAttribute('aria-haspopup');
+      n.removeAttribute('aria-hidden');
+      n.removeAttribute('tabindex');
+      n.removeAttribute('contenteditable');
+      n.removeAttribute('translate');
+    }
+  });
+
+  const html = clone.innerHTML.trim();
+  const text = (clone.textContent || '').trim();
+
+  // Title: prefer the article's own H1, fall back to document title.
+  const h1 = clone.querySelector('h1') || document.querySelector('h1');
   const title =
-    titleEl?.textContent?.trim() ||
+    (h1?.textContent || '').trim() ||
     (document.title || '').split(/[–|-]/)[0].trim() ||
     'Untitled';
-  return {
-    title,
-    html: best ? best.el.innerHTML : '',
-    length: best ? best.len : 0,
-  };
+
+  return { title, html, length: text.length };
 }
