@@ -2,10 +2,10 @@
 import { listProjects } from './projects';
 import { fetchQueue, setRowStatus } from './sheets';
 import { extractContent } from './extract';
-import { createDraft, findPostByTitle, findPostByUrl, resolveRoute, updatePost } from './wordpress';
+import { createDraft, findPostByTitle, findPostByUrl, postExists, resolveRoute, updatePost } from './wordpress';
 import { htmlToBlocks } from './blocks';
 import { log } from './logger';
-import { hasProcessed, markProcessed } from './state';
+import { getProcessedRecord, hasProcessed, markProcessed, removeProcessed } from './state';
 import { getLiveState, updateLiveState } from './live-state';
 import type { ProjectConfig, QueueRow } from './types';
 
@@ -13,8 +13,25 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
   const { rowIndex } = row;
 
   if (hasProcessed(project.id, rowIndex)) {
-    log(project.id, 'info', `Row ${rowIndex} already processed, skipping.`, {}, rowIndex);
-    return { skipped: true };
+    // Verify the WP post still exists. If it was deleted in WordPress (and
+    // the row is back to "In-Progress" in the sheet), the user clearly wants
+    // it republished — drop the stale history record so we reprocess.
+    const prev = getProcessedRecord(project.id, rowIndex);
+    if (prev) {
+      const stillExists = await postExists(project, prev.route, prev.wpId);
+      if (stillExists) {
+        log(project.id, 'info', `Row ${rowIndex} already processed, skipping.`, {}, rowIndex);
+        return { skipped: true };
+      }
+      removeProcessed(project.id, rowIndex);
+      log(
+        project.id,
+        'warn',
+        `Row ${rowIndex} was previously published as ${prev.route} ${prev.wpId} but that ${prev.route} no longer exists in WordPress. Republishing.`,
+        { wpId: prev.wpId, route: prev.route },
+        rowIndex
+      );
+    }
   }
 
   if (!row.contentLink) {

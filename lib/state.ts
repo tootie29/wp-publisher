@@ -34,6 +34,21 @@ export function hasProcessed(projectId: string, rowIndex: number): boolean {
   return getProcessed(projectId).some((r) => r.rowIndex === rowIndex);
 }
 
+export function getProcessedRecord(
+  projectId: string,
+  rowIndex: number
+): ProcessedRecord | null {
+  return getProcessed(projectId).find((r) => r.rowIndex === rowIndex) ?? null;
+}
+
+export function removeProcessed(projectId: string, rowIndex: number): boolean {
+  const all = getProcessed(projectId);
+  const next = all.filter((r) => r.rowIndex !== rowIndex);
+  if (next.length === all.length) return false;
+  fs.writeFileSync(file(projectId), JSON.stringify(next, null, 2));
+  return true;
+}
+
 export function markProcessed(rec: ProcessedRecord) {
   const all = getProcessed(rec.projectId);
   all.push(rec);

@@ -198,6 +198,36 @@ export async function updatePost(
   return { id: data.id, link: data.link, editLink };
 }
 
+// Check whether a post/page with the given id still exists on the WordPress
+// site. Returns false on 404 (or trash, which the REST API also returns 404
+// for unless ?context=edit). Used to auto-clean stale local history when
+// users delete posts in WP and want the publisher to re-create them.
+export async function postExists(
+  project: ProjectConfig,
+  route: PageTypeRoute,
+  postId: number
+): Promise<boolean> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const path = route === 'post' ? 'posts' : 'pages';
+  try {
+    const res = await fetch(
+      `${base}/wp-json/wp/v2/${path}/${postId}?context=edit&_fields=id,status`,
+      {
+        headers: { Authorization: authHeader(project) },
+        cache: 'no-store',
+      }
+    );
+    if (res.status === 404) return false;
+    if (!res.ok) return true; // unknown error — assume exists, don't auto-delete
+    const data = (await res.json()) as { id: number; status: string };
+    // Treat trashed posts as "gone" so the publisher will recreate them.
+    return data.status !== 'trash';
+  } catch {
+    // Network error — be safe, assume it exists
+    return true;
+  }
+}
+
 export async function probeWp(project: ProjectConfig): Promise<{
   ok: boolean;
   username?: string;
