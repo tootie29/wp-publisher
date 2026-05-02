@@ -459,9 +459,15 @@ async function extractViaExtensionFetch(
   source: 'surfer' | 'frase'
 ): Promise<ExtractedContent> {
   const { enqueueFetch } = await import('./fetch-queue');
-  const { html, title: extTitle } = await enqueueFetch(url, source);
+  const result = await enqueueFetch(url, source);
+  const html = typeof result?.html === 'string' ? result.html : '';
+  const extTitle = typeof result?.title === 'string' ? result.title : '';
 
-  let title = (extTitle || '').trim();
+  if (!html) {
+    throw new Error('Extension returned no HTML for this URL');
+  }
+
+  let title = extTitle.trim();
   if (!title) {
     const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
     const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -469,7 +475,7 @@ async function extractViaExtensionFetch(
     title =
       (titleMatch && stripTags(titleMatch[1])) ||
       (titleTag && stripTags(titleTag[1]).split(/[–|-]/)[0].trim()) ||
-      'Untitled';
+      '';
   }
 
   return { title, htmlBody: html, sourceType: source };

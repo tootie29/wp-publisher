@@ -124,32 +124,34 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
   let wp;
   try {
     if (isRefresh) {
-      // Prefer an explicit Target URL when provided; otherwise locate the
-      // existing post by its title (matches sheet's Primary Keyword).
+      // Try to locate the existing post: explicit Target URL first, then
+      // by title (Primary Keyword). If nothing matches, fall back to
+      // creating a NEW draft using the project's page-type routing
+      // (Blog → post, Cluster/Resource/etc → page).
       let found = null as Awaited<ReturnType<typeof findPostByUrl>>;
       if (row.targetUrl) {
         found = await findPostByUrl(project, row.targetUrl);
-        if (!found) {
-          throw new Error(
-            `Could not find a WP post/page at ${row.targetUrl}. Check the URL is correct and the slug still matches.`
-          );
-        }
       } else {
         const lookupTitle = row.primaryKeyword || extracted.title;
-        const byTitle = await findPostByTitle(project, lookupTitle);
-        if (!byTitle) {
-          throw new Error(
-            `Could not find an existing WP post/page with title "${lookupTitle}". ` +
-            `Either add a Target URL on this row, or check the post title matches.`
-          );
+        if (lookupTitle) {
+          found = await findPostByTitle(project, lookupTitle);
         }
-        log(project.id, 'info',
-          `Matched existing ${byTitle.type} by title: "${byTitle.title}" (${byTitle.link})`,
-          { wpId: byTitle.id }, rowIndex
-        );
-        found = byTitle;
       }
-      wp = await updatePost(project, found.type, found.id, gutenberg, title);
+
+      if (found) {
+        log(project.id, 'info',
+          `Matched existing ${found.type} ${found.id} for refresh: ${found.link}`,
+          { wpId: found.id }, rowIndex
+        );
+        wp = await updatePost(project, found.type, found.id, gutenberg, title);
+      } else {
+        log(project.id, 'warn',
+          `No existing WP ${route} found for "${title}" — creating a NEW ${route} draft instead.`,
+          { route, lookupTitle: row.primaryKeyword || extracted.title, targetUrl: row.targetUrl || null },
+          rowIndex
+        );
+        wp = await createDraft(project, route, title, gutenberg);
+      }
     } else {
       wp = await createDraft(project, route, title, gutenberg);
     }
