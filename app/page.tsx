@@ -1,6 +1,7 @@
 // app/page.tsx
 import Link from 'next/link';
-import { listProjects } from '@/lib/projects';
+import { listProjectsForUser } from '@/lib/projects';
+import { auth } from '@/lib/auth';
 import { getServiceAccountEmail } from '@/lib/google';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,8 +15,9 @@ function hasServiceAccount() {
   return fs.existsSync(full);
 }
 
-export default function Home() {
-  const projects = listProjects();
+export default async function Home() {
+  const session = await auth();
+  const projects = listProjectsForUser(session?.user?.email);
   const sa = hasServiceAccount() ? getServiceAccountEmail() : null;
   const configured = !!sa;
 

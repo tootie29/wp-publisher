@@ -33,6 +33,10 @@ export interface ProjectConfig {
   // Default post status on publish; 'draft' keeps it safe
   publishStatus: 'draft' | 'publish' | 'pending';
   enabled: boolean;
+  // Email of the user who created/owns this project. Existing projects without
+  // this field are treated as "shared" (visible to everyone) for backward
+  // compat. New projects always carry the creator's email.
+  ownerEmail?: string;
 }
 
 export type ContentMode = 'new' | 'refresh';

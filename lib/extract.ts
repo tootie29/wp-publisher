@@ -302,11 +302,13 @@ export async function extractFromSurfer(
 async function extractWithConnectorCookies(
   projectId: string,
   url: string,
-  source: 'surfer' | 'frase'
+  source: 'surfer' | 'frase',
+  runnerEmail: string
 ): Promise<ExtractedContent> {
   // Lazy-import so this module doesn't pull connector storage into client bundles.
   const { loadCookies } = await import('./connector');
-  const record = loadCookies(projectId, source);
+  const { userKey } = await import('./users');
+  const record = loadCookies(userKey(runnerEmail), projectId, source);
   if (!record) {
     throw new Error(
       `No saved ${source} cookies for this project. Open the project page and click the "WP Publisher Connector" extension to connect.`
@@ -443,12 +445,20 @@ async function extractWithConnectorCookies(
   }
 }
 
-export async function extractFromSurferViaConnector(projectId: string, url: string) {
-  return extractWithConnectorCookies(projectId, url, 'surfer');
+export async function extractFromSurferViaConnector(
+  projectId: string,
+  url: string,
+  runnerEmail: string
+) {
+  return extractWithConnectorCookies(projectId, url, 'surfer', runnerEmail);
 }
 
-export async function extractFromFraseViaConnector(projectId: string, url: string) {
-  return extractWithConnectorCookies(projectId, url, 'frase');
+export async function extractFromFraseViaConnector(
+  projectId: string,
+  url: string,
+  runnerEmail: string
+) {
+  return extractWithConnectorCookies(projectId, url, 'frase', runnerEmail);
 }
 
 // Newer path — outsource the actual fetch to the user's authenticated browser
@@ -456,10 +466,12 @@ export async function extractFromFraseViaConnector(projectId: string, url: strin
 // (cookies + localStorage in headless Playwright) gets bot-detected.
 async function extractViaExtensionFetch(
   url: string,
-  source: 'surfer' | 'frase'
+  source: 'surfer' | 'frase',
+  runnerEmail: string
 ): Promise<ExtractedContent> {
   const { enqueueFetch } = await import('./fetch-queue');
-  const result = await enqueueFetch(url, source);
+  const { userKey } = await import('./users');
+  const result = await enqueueFetch(url, source, userKey(runnerEmail));
   const html = typeof result?.html === 'string' ? result.html : '';
   const extTitle = typeof result?.title === 'string' ? result.title : '';
 
@@ -483,7 +495,8 @@ async function extractViaExtensionFetch(
 
 export async function extractContent(
   projectId: string,
-  url: string
+  url: string,
+  runnerEmail: string
 ): Promise<ExtractedContent> {
   const kind = classifyLink(url);
   if (kind === 'gdoc') return extractFromGoogleDoc(url);
@@ -492,19 +505,20 @@ export async function extractContent(
     // Prefer the new connector-based path (headless, deployable). Fall back to
     // the legacy headful Playwright login if a per-project profile exists.
     const { loadCookies } = await import('./connector');
-    if (loadCookies(projectId, 'surfer')) {
-      return extractFromSurferViaConnector(projectId, url);
+    const { userKey } = await import('./users');
+    if (loadCookies(userKey(runnerEmail), projectId, 'surfer')) {
+      return extractFromSurferViaConnector(projectId, url, runnerEmail);
     }
     if (hasProfile(projectId)) return extractFromSurfer(projectId, url);
     throw new Error(
-      'No Surfer connection. Install the WP Publisher Connector extension and click "Connect Surfer" on this project page.'
+      'No Surfer connection for this user. Install the WP Publisher Connector extension and click "Connect Surfer" on this project page.'
     );
   }
 
   if (kind === 'frase') {
     // Frase aggressively bot-detects headless Chromium even with full cookie
     // + localStorage replay, so always go through the extension fetch path.
-    return extractViaExtensionFetch(url, 'frase');
+    return extractViaExtensionFetch(url, 'frase', runnerEmail);
   }
 
   throw new Error(`Don't know how to extract from ${url}`);

@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { getProcessed } from '@/lib/state';
+import { ownsProject } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,6 +69,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
   const project = getProject(params.id);
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (!ownsProject(project.ownerEmail, session.user.email)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const url = new URL(req.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 100);

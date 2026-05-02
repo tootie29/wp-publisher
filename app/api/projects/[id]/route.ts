@@ -2,25 +2,49 @@
 import { NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
+import { auth } from '@/lib/auth';
 import { deleteProject, getProject, publicProject, saveProject } from '@/lib/projects';
 import { profileDir } from '@/lib/extract';
+import { ownsProject } from '@/lib/users';
 import type { ProjectConfig } from '@/lib/types';
+
+async function gateProject(id: string) {
+  const session = await auth();
+  if (!session?.user?.email) {
+    return { resp: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };
+  }
+  const project = getProject(id);
+  if (!project) {
+    return { resp: NextResponse.json({ error: 'Not found' }, { status: 404 }) };
+  }
+  if (!ownsProject(project.ownerEmail, session.user.email)) {
+    return { resp: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+  return { project, email: session.user.email };
+}
 
 export const dynamic = 'force-dynamic';
 
 // Returns FULL project (including credentials) for editing.
 // Only exposed via localhost — acceptable for a local-only dashboard.
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const p = getProject(params.id);
-  if (!p) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json({ project: p });
+  const gate = await gateProject(params.id);
+  if (gate.resp) return gate.resp;
+  return NextResponse.json({ project: gate.project });
 }
 
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   try {
+    const gate = await gateProject(params.id);
+    if (gate.resp) return gate.resp;
+
     const body = (await req.json()) as ProjectConfig;
     const err = validate(body);
     if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
+
+    // Preserve ownership. Don't let edits silently re-stamp the owner.
+    body.ownerEmail = gate.project.ownerEmail || gate.email;
+
     const saved = saveProject(body, params.id);
     return NextResponse.json({ ok: true, project: publicProject(saved) });
   } catch (e) {
@@ -30,9 +54,8 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const id = params.id;
-  if (!getProject(id)) {
-    return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
-  }
+  const gate = await gateProject(id);
+  if (gate.resp) return gate.resp;
 
   // Remove project config
   const ok = deleteProject(id);

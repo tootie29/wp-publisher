@@ -17,6 +17,7 @@ interface Job {
   id: string;
   url: string;
   source: FetchSource;
+  ownerKey: string;       // userKey of the user this job belongs to
   createdAt: number;
   resolve: (r: FetchResult) => void;
   reject: (e: Error) => void;
@@ -39,7 +40,11 @@ function getStore(): { jobs: Map<string, Job>; pending: Job[] } {
 
 const TIMEOUT_MS = 60_000;
 
-export function enqueueFetch(url: string, source: FetchSource): Promise<FetchResult> {
+export function enqueueFetch(
+  url: string,
+  source: FetchSource,
+  ownerKey: string
+): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
     const store = getStore();
     const id = crypto.randomUUID();
@@ -47,6 +52,7 @@ export function enqueueFetch(url: string, source: FetchSource): Promise<FetchRes
       id,
       url,
       source,
+      ownerKey,
       createdAt: Date.now(),
       resolve,
       reject,
@@ -71,12 +77,23 @@ export function enqueueFetch(url: string, source: FetchSource): Promise<FetchRes
   });
 }
 
-export function takeNextJob(): { id: string; url: string; source: FetchSource } | null {
+// Take the next job for a specific user. Each user's open dashboard tab only
+// processes jobs that user enqueued, so cross-account fetches don't collide.
+export function takeNextJobForOwner(
+  ownerKey: string
+): { id: string; url: string; source: FetchSource } | null {
   const store = getStore();
-  // Pull jobs that haven't been handed out yet
-  while (store.pending.length) {
-    const job = store.pending.shift()!;
-    if (!store.jobs.has(job.id)) continue; // timed out already
+  // Find first pending job that matches ownerKey
+  for (let i = 0; i < store.pending.length; i++) {
+    const job = store.pending[i];
+    if (!store.jobs.has(job.id)) {
+      // Stale (timed out) — remove it
+      store.pending.splice(i, 1);
+      i--;
+      continue;
+    }
+    if (job.ownerKey !== ownerKey) continue;
+    store.pending.splice(i, 1);
     job.takenAt = Date.now();
     return { id: job.id, url: job.url, source: job.source };
   }
@@ -85,6 +102,7 @@ export function takeNextJob(): { id: string; url: string; source: FetchSource } 
 
 export function completeJob(
   id: string,
+  ownerKey: string,
   html?: string,
   error?: string,
   title?: string
@@ -92,6 +110,8 @@ export function completeJob(
   const store = getStore();
   const job = store.jobs.get(id);
   if (!job) return false;
+  // Job result must come back from the same user that picked it up.
+  if (job.ownerKey !== ownerKey) return false;
   store.jobs.delete(id);
   if (error) job.reject(new Error(error));
   else if (typeof html === 'string' && html.length > 0) job.resolve({ html, title });

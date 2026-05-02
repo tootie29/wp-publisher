@@ -49,7 +49,17 @@ export function publicProject(p: ProjectConfig) {
     },
     pageTypeRouting: p.pageTypeRouting,
     publishStatus: p.publishStatus,
+    ownerEmail: p.ownerEmail || null,
   };
+}
+
+// Return the projects that should be visible to a given user. Projects with
+// no ownerEmail are treated as legacy/shared (visible to all) until claimed.
+export function listProjectsForUser(email: string | null | undefined): ProjectConfig[] {
+  const me = (email || '').toLowerCase();
+  return listProjects().filter(
+    (p) => !p.ownerEmail || p.ownerEmail.toLowerCase() === me
+  );
 }
 
 function slugify(s: string): string {

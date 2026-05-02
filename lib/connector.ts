@@ -40,12 +40,18 @@ const dataDir = (() => {
   return path.join(process.cwd(), 'data');
 })();
 
-function dirFor(projectId: string): string {
-  return path.join(dataDir, 'connector', projectId);
+function dirFor(userKey: string, projectId: string): string {
+  return path.join(dataDir, 'connector', userKey, projectId);
 }
 
-function fileFor(projectId: string, source: ConnectorSource): string {
-  return path.join(dirFor(projectId), `${source}.enc.json`);
+function fileFor(userKey: string, projectId: string, source: ConnectorSource): string {
+  return path.join(dirFor(userKey, projectId), `${source}.enc.json`);
+}
+
+// Legacy path used before per-user isolation. Read-only fallback so existing
+// connections continue to work until users reconnect.
+function legacyFile(projectId: string, source: ConnectorSource): string {
+  return path.join(dataDir, 'connector', projectId, `${source}.enc.json`);
 }
 
 function getKey(): Buffer {
@@ -57,13 +63,14 @@ function getKey(): Buffer {
 }
 
 export function saveCookies(
+  userKey: string,
   projectId: string,
   source: ConnectorSource,
   cookies: ConnectorCookie[],
   localStorage?: Record<string, string>,
   sessionStorage?: Record<string, string>
 ): void {
-  fs.mkdirSync(dirFor(projectId), { recursive: true });
+  fs.mkdirSync(dirFor(userKey, projectId), { recursive: true });
 
   const record: ConnectorRecord = {
     source,
@@ -86,17 +93,13 @@ export function saveCookies(
     ciphertext: ct.toString('base64'),
   };
 
-  fs.writeFileSync(fileFor(projectId, source), JSON.stringify(out));
+  fs.writeFileSync(fileFor(userKey, projectId, source), JSON.stringify(out));
 }
 
-export function loadCookies(
-  projectId: string,
-  source: ConnectorSource
-): ConnectorRecord | null {
-  const f = fileFor(projectId, source);
-  if (!fs.existsSync(f)) return null;
+function readEncrypted(filePath: string): ConnectorRecord | null {
+  if (!fs.existsSync(filePath)) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(f, 'utf8')) as EncryptedFile;
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8')) as EncryptedFile;
     const iv = Buffer.from(raw.iv, 'base64');
     const tag = Buffer.from(raw.tag, 'base64');
     const ct = Buffer.from(raw.ciphertext, 'base64');
@@ -109,24 +112,40 @@ export function loadCookies(
   }
 }
 
-export function clearCookies(projectId: string, source: ConnectorSource): boolean {
-  const f = fileFor(projectId, source);
-  if (!fs.existsSync(f)) return false;
-  fs.unlinkSync(f);
-  return true;
+export function loadCookies(
+  userKey: string,
+  projectId: string,
+  source: ConnectorSource
+): ConnectorRecord | null {
+  // Per-user record first, then legacy shared record.
+  return (
+    readEncrypted(fileFor(userKey, projectId, source)) ||
+    readEncrypted(legacyFile(projectId, source))
+  );
 }
 
-export function statusFor(projectId: string): {
-  surfer: { connected: boolean; ageSeconds?: number; cookieCount?: number };
-  frase: { connected: boolean; ageSeconds?: number; cookieCount?: number };
-} {
+export function clearCookies(
+  userKey: string,
+  projectId: string,
+  source: ConnectorSource
+): boolean {
+  const f = fileFor(userKey, projectId, source);
+  if (fs.existsSync(f)) {
+    fs.unlinkSync(f);
+    return true;
+  }
+  return false;
+}
+
+export function statusFor(userKey: string, projectId: string) {
   return {
-    surfer: oneStatus(projectId, 'surfer'),
-    frase: oneStatus(projectId, 'frase'),
+    surfer: oneStatus(userKey, projectId, 'surfer'),
+    frase: oneStatus(userKey, projectId, 'frase'),
   };
 }
 
 function oneStatus(
+  userKey: string,
   projectId: string,
   source: ConnectorSource
 ): {
@@ -135,7 +154,7 @@ function oneStatus(
   cookieCount?: number;
   localStorageKeys?: number;
 } {
-  const r = loadCookies(projectId, source);
+  const r = loadCookies(userKey, projectId, source);
   if (!r) return { connected: false };
   const ageSeconds = Math.floor((Date.now() - new Date(r.savedAt).getTime()) / 1000);
   return {

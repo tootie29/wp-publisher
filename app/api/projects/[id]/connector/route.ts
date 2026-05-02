@@ -9,6 +9,7 @@ import {
   saveCookies,
   statusFor,
 } from '@/lib/connector';
+import { userKey, ownsProject } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,28 +17,39 @@ function isSource(s: string | null): s is ConnectorSource {
   return s === 'surfer' || s === 'frase';
 }
 
-async function requireAuth(): Promise<NextResponse | null> {
+async function requireAuth() {
   const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ ok: false, error: 'Not authenticated' }, { status: 401 });
+  if (!session?.user?.email) {
+    return { error: NextResponse.json({ ok: false, error: 'Not authenticated' }, { status: 401 }) };
   }
-  return null;
+  return { email: session.user.email };
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const unauth = await requireAuth();
-  if (unauth) return unauth;
-  if (!getProject(params.id)) {
+  const { error, email } = await requireAuth();
+  if (error) return error;
+
+  const project = getProject(params.id);
+  if (!project) {
     return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
   }
-  return NextResponse.json(statusFor(params.id));
+  if (!ownsProject(project.ownerEmail, email)) {
+    return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
+  }
+
+  return NextResponse.json(statusFor(userKey(email!), params.id));
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const unauth = await requireAuth();
-  if (unauth) return unauth;
-  if (!getProject(params.id)) {
+  const { error, email } = await requireAuth();
+  if (error) return error;
+
+  const project = getProject(params.id);
+  if (!project) {
     return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
+  }
+  if (!ownsProject(project.ownerEmail, email)) {
+    return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
   }
 
   const url = new URL(req.url);
@@ -60,7 +72,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: 'No cookies provided' }, { status: 400 });
   }
 
-  saveCookies(params.id, source, body.cookies, body.localStorage, body.sessionStorage);
+  saveCookies(userKey(email!), params.id, source, body.cookies, body.localStorage, body.sessionStorage);
   return NextResponse.json({
     ok: true,
     source,
@@ -70,13 +82,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 }
 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
-  const unauth = await requireAuth();
-  if (unauth) return unauth;
+  const { error, email } = await requireAuth();
+  if (error) return error;
+
   const url = new URL(req.url);
   const source = url.searchParams.get('source');
   if (!isSource(source)) {
     return NextResponse.json({ ok: false, error: 'Invalid source' }, { status: 400 });
   }
-  const removed = clearCookies(params.id, source);
+  const removed = clearCookies(userKey(email!), params.id, source);
   return NextResponse.json({ ok: true, removed });
 }

@@ -9,7 +9,7 @@ import { getProcessedRecord, hasProcessed, markProcessed, removeProcessed } from
 import { getLiveState, updateLiveState } from './live-state';
 import type { ProjectConfig, QueueRow } from './types';
 
-export async function processRow(project: ProjectConfig, row: QueueRow) {
+export async function processRow(project: ProjectConfig, row: QueueRow, runnerEmail: string) {
   const { rowIndex } = row;
 
   if (hasProcessed(project.id, rowIndex)) {
@@ -71,7 +71,7 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
 
   let extracted;
   try {
-    extracted = await extractContent(project.id, row.contentLink);
+    extracted = await extractContent(project.id, row.contentLink, runnerEmail);
   } catch (e) {
     log(project.id, 'error', `Extraction failed: ${(e as Error).message}`, {
       link: row.contentLink,
@@ -212,11 +212,14 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
   return { success: true, wpId: wp.id, editLink: wp.editLink };
 }
 
-export async function runProject(project: ProjectConfig) {
+export async function runProject(project: ProjectConfig, runnerEmail?: string) {
   if (!project.enabled) {
     log(project.id, 'info', 'Project disabled, skipping.');
     return;
   }
+  // For scheduled runs (no runnerEmail given), fall back to the project's
+  // owner — that's whose Surfer/Frase session we should use for fetches.
+  const effectiveRunner = runnerEmail || project.ownerEmail || '';
   updateLiveState({
     running: true, projectId: project.id, rowIndex: null,
     phase: 'polling',
@@ -236,7 +239,7 @@ export async function runProject(project: ProjectConfig) {
       log(project.id, 'warn', `Stop requested — halting before row ${row.rowIndex}.`);
       break;
     }
-    await processRow(project, row);
+    await processRow(project, row, effectiveRunner);
   }
 }
 
@@ -246,7 +249,8 @@ export async function runAll() {
   const projects = listProjects();
   for (const p of projects) {
     if (getLiveState().cancelRequested) break;
-    await runProject(p);
+    // Scheduled (auto-poll) run — use the project's own owner as the runner.
+    await runProject(p, p.ownerEmail);
   }
   updateLiveState({
     running: false, projectId: null, rowIndex: null,

@@ -1,7 +1,8 @@
 // app/wp-publisher/page.tsx
 import Link from 'next/link';
 import ProjectList from '@/components/ProjectList';
-import { listProjects, publicProject } from '@/lib/projects';
+import { listProjectsForUser, publicProject } from '@/lib/projects';
+import { auth } from '@/lib/auth';
 import { Plus, FileText } from 'lucide-react';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,8 +15,9 @@ function hasServiceAccount() {
   return fs.existsSync(full);
 }
 
-export default function WpPublisherPage() {
-  const projects = listProjects().map(publicProject);
+export default async function WpPublisherPage() {
+  const session = await auth();
+  const projects = listProjectsForUser(session?.user?.email).map(publicProject);
   const configured = hasServiceAccount();
   const pollMins = process.env.POLL_INTERVAL_MINUTES || 5;
 

@@ -1,19 +1,35 @@
 // app/api/projects/route.ts
 import { NextResponse } from 'next/server';
-import { listProjects, publicProject, saveProject } from '@/lib/projects';
+import { auth } from '@/lib/auth';
+import { listProjectsForUser, publicProject, saveProject } from '@/lib/projects';
 import type { ProjectConfig } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  return NextResponse.json({ projects: listProjects().map(publicProject) });
+  const session = await auth();
+  if (!session?.user?.email) {
+    return NextResponse.json({ projects: [] }, { status: 401 });
+  }
+  return NextResponse.json({
+    projects: listProjectsForUser(session.user.email).map(publicProject),
+  });
 }
 
 export async function POST(req: Request) {
   try {
+    const session = await auth();
+    if (!session?.user?.email) {
+      return NextResponse.json({ ok: false, error: 'Not authenticated' }, { status: 401 });
+    }
+
     const body = (await req.json()) as ProjectConfig;
     const err = validate(body);
     if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
+
+    // Stamp the creator's email so we can scope visibility/ACL.
+    body.ownerEmail = session.user.email;
+
     const saved = saveProject(body);
     return NextResponse.json({ ok: true, project: publicProject(saved) });
   } catch (e) {
