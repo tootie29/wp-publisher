@@ -4,7 +4,8 @@
 // We open the URL in a hidden background tab, wait for the SPA to render,
 // scrape the article DOM, then close the tab.
 
-const RENDER_DELAY_MS = 8000;     // time for the SPA to fetch + render
+const RENDER_TIMEOUT_MS = 25000;  // poll for content up to this long
+const POLL_INTERVAL_MS = 1000;    // how often to check the tab for content
 const NAV_TIMEOUT_MS = 30000;     // max wait for the tab to finish loading
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -36,8 +37,15 @@ async function handleFetchSource(msg) {
       };
     }
 
-    // Give the SPA time to fetch + render the article.
-    await sleep(RENDER_DELAY_MS);
+    // Poll the tab until article content shows up (or we hit the timeout).
+    // Faster on simple pages, gives slow SPAs (Frase preview view) time to
+    // fetch the document over the network.
+    const ready = await waitForContent(tab.id, RENDER_TIMEOUT_MS);
+    if (!ready) {
+      return {
+        error: `Could not detect article content on the ${source} page after ${RENDER_TIMEOUT_MS / 1000}s. URL: ${finalUrl}`,
+      };
+    }
 
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -103,6 +111,48 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Poll a tab until any of our article selectors has substantive content.
+// Cheap to run repeatedly — the executeScript call is fast.
+async function waitForContent(tabId, maxMs) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => {
+          const selectors = [
+            '.ProseMirror',
+            '.tiptap.ProseMirror',
+            '[role="textbox"][contenteditable="true"]',
+            '[contenteditable="true"]',
+            '[data-testid="editor-content"]',
+            '[data-testid="document-content"]',
+            '[data-testid*="preview"]',
+            '.preview',
+            '.document-preview',
+            '.preview-content',
+            'main article',
+            'article',
+          ];
+          for (const sel of selectors) {
+            const els = document.querySelectorAll(sel);
+            for (const el of els) {
+              const text = (el.innerText || '').trim();
+              if (text.length >= 200) return true;
+            }
+          }
+          return false;
+        },
+      });
+      if (results.some((r) => r?.result === true)) return true;
+    } catch {
+      // Tab may not be ready yet for scripting — keep polling.
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
 // Runs in the target tab's page context.
 // Picks the most specific article-body element and strips UI cruft from it.
 function scrapeArticle() {
@@ -115,6 +165,11 @@ function scrapeArticle() {
     '[contenteditable="true"]',
     '[data-testid="editor-content"]',
     '[data-testid="document-content"]',
+    // Frase preview / read-only views
+    '[data-testid*="preview"]',
+    '.document-preview',
+    '.preview-content',
+    '.preview',
     'main article',
     'article',
   ];
