@@ -193,12 +193,45 @@ function scrapeArticle() {
   const html = clone.innerHTML.trim();
   const text = (clone.textContent || '').trim();
 
-  // Title: prefer the article's own H1, fall back to document title.
-  const h1 = clone.querySelector('h1') || document.querySelector('h1');
-  const title =
-    (h1?.textContent || '').trim() ||
-    (document.title || '').split(/[–|-]/)[0].trim() ||
-    'Untitled';
+  // Title: ONLY trust the article's own H1, or a dedicated title input on the
+  // editor page. Never use document.title — Frase / Surfer set that to their
+  // brand name, which would silently become the WP post title.
+  let title = '';
 
+  // 1. H1 inside the cleaned article body
+  const h1 = clone.querySelector('h1');
+  if (h1?.textContent) title = h1.textContent.trim();
+
+  // 2. H1 anywhere on the live page that is NOT inside known UI chrome
+  if (!title) {
+    const allH1s = Array.from(document.querySelectorAll('h1'));
+    for (const el of allH1s) {
+      if (el.closest('header,nav,aside,footer,[role="toolbar"],[data-testid*="header"],[data-testid*="sidebar"]')) continue;
+      const t = (el.textContent || '').trim();
+      if (t.length >= 3 && t.length <= 200) {
+        title = t;
+        break;
+      }
+    }
+  }
+
+  // 3. Frase / Surfer "Document title" input
+  if (!title) {
+    const inputs = Array.from(
+      document.querySelectorAll(
+        'input[placeholder*="title" i], input[aria-label*="title" i], input[name*="title" i]'
+      )
+    );
+    for (const el of inputs) {
+      const v = (el.value || '').trim();
+      if (v.length >= 3 && v.length <= 200) {
+        title = v;
+        break;
+      }
+    }
+  }
+
+  // No title found → leave empty; the worker will fall back to the sheet's
+  // Primary Keyword column.
   return { title, html, length: text.length };
 }
