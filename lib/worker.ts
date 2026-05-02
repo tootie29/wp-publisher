@@ -81,9 +81,10 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
 
   const route = resolveRoute(project, row.pageType);
   // Title resolution:
-  // 1. Sheet's Primary Keyword column wins when present — that's the user's
-  //    canonical title for the post (matches Yoast keyphrase too).
-  // 2. Fall back to whatever the extractor pulled out of the source doc's H1.
+  // 1. The article's own <h1> wins — that's the canonical title written by
+  //    whoever drafted the content.
+  // 2. Fall back to the sheet's Primary Keyword column if no usable H1 was
+  //    found (or if the extractor only returned a SaaS brand name).
   // 3. Last resort: 'Untitled'. We never trust the source's <title> tag
   //    (Frase / Surfer set that to their brand name).
   const extractedClean = (extracted.title || '').trim();
@@ -91,7 +92,10 @@ export async function processRow(project: ProjectConfig, row: QueueRow) {
     !extractedClean ||
     extractedClean === 'Untitled' ||
     /^(frase|surfer|surfer seo|app\.frase\.io|app\.surferseo\.com)$/i.test(extractedClean);
-  const title = (row.primaryKeyword || '').trim() || (!looksGeneric ? extractedClean : 'Untitled');
+  const title =
+    (!looksGeneric ? extractedClean : '') ||
+    (row.primaryKeyword || '').trim() ||
+    'Untitled';
 
   const isRefresh = row.contentMode === 'refresh';
 
