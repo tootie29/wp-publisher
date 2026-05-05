@@ -10,8 +10,10 @@ export const metadata: Metadata = {
   description: 'WP Publisher and project tools',
 };
 
-// Boot the background poller once per server process
-if (typeof window === 'undefined') {
+// Boot the in-process poller for long-lived servers only (local dev, VPS).
+// On Vercel the runtime is serverless — setInterval can't survive between
+// invocations, so the poller is replaced by Vercel Cron hitting /api/worker/run.
+if (typeof window === 'undefined' && !process.env.VERCEL) {
   try { startScheduler(); } catch (e) { console.error('scheduler failed to start', e); }
 }
 
