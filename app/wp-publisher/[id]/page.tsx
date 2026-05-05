@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ProjectDetailPage({ params }: { params: { id: string } }) {
   const session = await auth();
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) notFound();
   if (!ownsProject(project.ownerEmail, session?.user?.email)) notFound();
 

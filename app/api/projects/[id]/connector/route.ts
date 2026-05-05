@@ -29,7 +29,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const { error, email } = await requireAuth();
   if (error) return error;
 
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) {
     return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
   }
@@ -44,7 +44,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const { error, email } = await requireAuth();
   if (error) return error;
 
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) {
     return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
   }

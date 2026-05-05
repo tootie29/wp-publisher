@@ -67,7 +67,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!ownsProject(project.ownerEmail, session.user.email)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

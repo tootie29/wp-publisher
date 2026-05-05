@@ -17,7 +17,7 @@ function hasServiceAccount() {
 
 export default async function WpPublisherPage() {
   const session = await auth();
-  const projects = listProjectsForUser(session?.user?.email).map(publicProject);
+  const projects = (await listProjectsForUser(session?.user?.email)).map(publicProject);
   const configured = hasServiceAccount();
   const pollMins = process.env.POLL_INTERVAL_MINUTES || 5;
 

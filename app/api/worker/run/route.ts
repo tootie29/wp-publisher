@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     updateLiveState({ cancelRequested: false });
 
     if (projectId) {
-      const project = getProject(projectId);
+      const project = await getProject(projectId);
       if (!project) return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
       if (!ownsProject(project.ownerEmail, runnerEmail)) {
         return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });

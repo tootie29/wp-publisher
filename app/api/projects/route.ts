@@ -11,8 +11,9 @@ export async function GET() {
   if (!session?.user?.email) {
     return NextResponse.json({ projects: [] }, { status: 401 });
   }
+  const projects = await listProjectsForUser(session.user.email);
   return NextResponse.json({
-    projects: listProjectsForUser(session.user.email).map(publicProject),
+    projects: projects.map(publicProject),
   });
 }
 
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
     // Stamp the creator's email so we can scope visibility/ACL.
     body.ownerEmail = session.user.email;
 
-    const saved = saveProject(body);
+    const saved = await saveProject(body);
     return NextResponse.json({ ok: true, project: publicProject(saved) });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });

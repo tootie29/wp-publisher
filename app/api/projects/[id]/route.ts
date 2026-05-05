@@ -13,7 +13,7 @@ async function gateProject(id: string) {
   if (!session?.user?.email) {
     return { resp: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };
   }
-  const project = getProject(id);
+  const project = await getProject(id);
   if (!project) {
     return { resp: NextResponse.json({ error: 'Not found' }, { status: 404 }) };
   }
@@ -25,12 +25,17 @@ async function gateProject(id: string) {
 
 export const dynamic = 'force-dynamic';
 
-// Returns FULL project (including credentials) for editing.
-// Only exposed via localhost — acceptable for a local-only dashboard.
+// Returns the project for editing with the WP app password redacted. The form
+// treats an empty password as "leave existing"; the user only types it again
+// to rotate it.
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const gate = await gateProject(params.id);
   if (gate.resp) return gate.resp;
-  return NextResponse.json({ project: gate.project });
+  const safe: ProjectConfig = {
+    ...gate.project,
+    wordpress: { ...gate.project.wordpress, appPassword: '' },
+  };
+  return NextResponse.json({ project: safe });
 }
 
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
@@ -39,13 +44,13 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     if (gate.resp) return gate.resp;
 
     const body = (await req.json()) as ProjectConfig;
-    const err = validate(body);
+    const err = validate(body, { isUpdate: true });
     if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });
 
     // Preserve ownership. Don't let edits silently re-stamp the owner.
     body.ownerEmail = gate.project.ownerEmail || gate.email;
 
-    const saved = saveProject(body, params.id);
+    const saved = await saveProject(body, params.id);
     return NextResponse.json({ ok: true, project: publicProject(saved) });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
@@ -58,7 +63,7 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   if (gate.resp) return gate.resp;
 
   // Remove project config
-  const ok = deleteProject(id);
+  const ok = await deleteProject(id);
 
   // Best-effort cleanup of project-scoped files. We log but don't fail the
   // delete if any of these are already gone.
@@ -90,11 +95,12 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   return NextResponse.json({ ok, cleaned });
 }
 
-function validate(p: Partial<ProjectConfig>): string | null {
+function validate(p: Partial<ProjectConfig>, opts: { isUpdate?: boolean } = {}): string | null {
   if (!p.name) return 'Project name is required';
   if (!p.wordpress?.baseUrl) return 'WordPress URL is required';
   if (!p.wordpress?.username) return 'WordPress username is required';
-  if (!p.wordpress?.appPassword) return 'WordPress app password is required';
+  // On update, an empty password means "keep existing" — only required for new projects.
+  if (!opts.isUpdate && !p.wordpress?.appPassword) return 'WordPress app password is required';
   if (!p.sheet?.sheetId) return 'Google Sheet ID is required';
   if (!p.sheet?.tabName) return 'Sheet tab name is required';
   return null;

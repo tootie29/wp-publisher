@@ -246,7 +246,7 @@ export async function runProject(project: ProjectConfig, runnerEmail?: string) {
 export async function runAll() {
   // Clear any leftover cancel flag from a previous run.
   updateLiveState({ cancelRequested: false });
-  const projects = listProjects();
+  const projects = await listProjects();
   for (const p of projects) {
     if (getLiveState().cancelRequested) break;
     // Scheduled (auto-poll) run — use the project's own owner as the runner.

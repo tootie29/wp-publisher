@@ -17,7 +17,7 @@ function hasServiceAccount() {
 
 export default async function Home() {
   const session = await auth();
-  const projects = listProjectsForUser(session?.user?.email);
+  const projects = await listProjectsForUser(session?.user?.email);
   const sa = hasServiceAccount() ? getServiceAccountEmail() : null;
   const configured = !!sa;
 

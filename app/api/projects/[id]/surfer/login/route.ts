@@ -6,7 +6,7 @@ import { openSurferLogin } from '@/lib/extract';
 export const dynamic = 'force-dynamic';
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
 
   const result = await openSurferLogin(project.id);

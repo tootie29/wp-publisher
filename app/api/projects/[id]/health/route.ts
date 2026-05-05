@@ -13,7 +13,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!session?.user?.email) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) {
     return NextResponse.json(
       {

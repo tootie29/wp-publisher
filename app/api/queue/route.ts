@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   const projectId = url.searchParams.get('projectId');
   if (!projectId) return NextResponse.json({ error: 'projectId required' }, { status: 400 });
 
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
   if (!ownsProject(project.ownerEmail, session.user.email)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

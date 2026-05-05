@@ -7,7 +7,7 @@ import { checkSurferSession, hasProfile, profileDir } from '@/lib/extract';
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) {
     return NextResponse.json({ loggedIn: false, detail: 'Project not found' }, { status: 404 });
   }
@@ -20,7 +20,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 // Clear the saved browser profile (logout)
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const project = getProject(params.id);
+  const project = await getProject(params.id);
   if (!project) return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
   const dir = profileDir(project.id);
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
