@@ -16,10 +16,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       const email = user.email?.toLowerCase();
       if (!email) return false;
 
-      if (allowedEmails.length > 0 && !allowedEmails.includes(email)) return false;
-      if (allowedDomain && !email.endsWith(`@${allowedDomain}`)) return false;
+      const hasList = allowedEmails.length > 0;
+      const hasDomain = !!allowedDomain;
+      if (!hasList && !hasDomain) return true;
 
-      return true;
+      const matchesList = hasList && allowedEmails.includes(email);
+      const matchesDomain = hasDomain && email.endsWith(`@${allowedDomain}`);
+      return matchesList || matchesDomain;
     },
   },
 });
