@@ -91,7 +91,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     // had (or that someone else published) won't have a keyword unless Yoast's
     // focus keyphrase meta is exposed via REST on the site.
     const localKeywordById = new Map<number, string>();
-    for (const r of getProcessed(params.id)) {
+    for (const r of await getProcessed(params.id)) {
       if (r.primaryKeyword) localKeywordById.set(r.wpId, r.primaryKeyword);
     }
 

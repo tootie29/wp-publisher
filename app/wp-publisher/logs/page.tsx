@@ -10,8 +10,8 @@ const LEVEL_COLORS: Record<string, string> = {
   success: 'text-emerald-400',
 };
 
-export default function LogsPage() {
-  const logs = readAllLogs(300);
+export default async function LogsPage() {
+  const logs = await readAllLogs(300);
 
   return (
     <>

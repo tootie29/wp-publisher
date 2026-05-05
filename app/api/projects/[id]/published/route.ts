@@ -1,10 +1,8 @@
 // app/api/projects/[id]/published/route.ts
 import { NextResponse } from 'next/server';
-import fs from 'node:fs';
-import path from 'node:path';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
-import { recentProcessed, runSummary } from '@/lib/state';
+import { clearProcessed, recentProcessed, runSummary } from '@/lib/state';
 import { ownsProject } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
@@ -68,8 +66,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const url = new URL(req.url);
   const limit = parseInt(url.searchParams.get('limit') || '50', 10);
 
-  const records = recentProcessed(project.id, limit);
-  const summary = runSummary(project.id);
+  const records = await recentProcessed(project.id, limit);
+  const summary = await runSummary(project.id);
 
   // Live-check WP status for every item so the dashboard can hide rows that
   // were published (or trashed) in WordPress out-of-band.
@@ -103,7 +101,6 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   if (!ownsProject(project.ownerEmail, session.user.email)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  const file = path.join(process.cwd(), 'data', `${project.id}.processed.json`);
-  if (fs.existsSync(file)) fs.unlinkSync(file);
-  return NextResponse.json({ ok: true });
+  const cleared = await clearProcessed(project.id);
+  return NextResponse.json({ ok: true, cleared });
 }

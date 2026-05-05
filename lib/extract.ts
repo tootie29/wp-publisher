@@ -100,7 +100,7 @@ function wrapLists(html: string): string {
 export async function extractFromGoogleDoc(url: string): Promise<ExtractedContent> {
   const id = extractDocId(url);
   if (!id) throw new Error('Could not parse Google Doc ID from URL');
-  const auth = getAuth();
+  const auth = await getAuth();
   const docs = google.docs({ version: 'v1', auth });
   const res = await docs.documents.get({ documentId: id });
   const doc = res.data;
@@ -308,7 +308,7 @@ async function extractWithConnectorCookies(
   // Lazy-import so this module doesn't pull connector storage into client bundles.
   const { loadCookies } = await import('./connector');
   const { userKey } = await import('./users');
-  const record = loadCookies(userKey(runnerEmail), projectId, source);
+  const record = await loadCookies(userKey(runnerEmail), projectId, source);
   if (!record) {
     throw new Error(
       `No saved ${source} cookies for this project. Open the project page and click the "WP Publisher Connector" extension to connect.`
@@ -506,7 +506,7 @@ export async function extractContent(
     // the legacy headful Playwright login if a per-project profile exists.
     const { loadCookies } = await import('./connector');
     const { userKey } = await import('./users');
-    if (loadCookies(userKey(runnerEmail), projectId, 'surfer')) {
+    if (await loadCookies(userKey(runnerEmail), projectId, 'surfer')) {
       return extractFromSurferViaConnector(projectId, url, runnerEmail);
     }
     if (hasProfile(projectId)) return extractFromSurfer(projectId, url);

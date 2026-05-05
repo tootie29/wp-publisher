@@ -37,7 +37,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
   }
 
-  return NextResponse.json(statusFor(userKey(email!), params.id));
+  return NextResponse.json(await statusFor(userKey(email!), params.id));
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -72,7 +72,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ ok: false, error: 'No cookies provided' }, { status: 400 });
   }
 
-  saveCookies(userKey(email!), params.id, source, body.cookies, body.localStorage, body.sessionStorage);
+  await saveCookies(userKey(email!), params.id, source, body.cookies, body.localStorage, body.sessionStorage);
   return NextResponse.json({
     ok: true,
     source,
@@ -90,6 +90,6 @@ export async function DELETE(req: Request, { params }: { params: { id: string } 
   if (!isSource(source)) {
     return NextResponse.json({ ok: false, error: 'Invalid source' }, { status: 400 });
   }
-  const removed = clearCookies(userKey(email!), params.id, source);
+  const removed = await clearCookies(userKey(email!), params.id, source);
   return NextResponse.json({ ok: true, removed });
 }

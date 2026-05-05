@@ -8,6 +8,6 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const projectId = url.searchParams.get('projectId');
   const limit = parseInt(url.searchParams.get('limit') || '200', 10);
-  const logs = projectId ? readLogs(projectId, limit) : readAllLogs(limit);
+  const logs = projectId ? await readLogs(projectId, limit) : await readAllLogs(limit);
   return NextResponse.json({ logs });
 }

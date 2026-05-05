@@ -1,12 +1,28 @@
 // lib/logger.ts
-import fs from 'node:fs';
-import path from 'node:path';
+// Postgres-backed logging. Writes are fire-and-forget so existing call sites
+// stay synchronous; the worker pipeline has many awaits between log calls,
+// giving inserts time to flush before the request returns. Reads are async.
+import { pool } from './db';
 import type { LogEntry, LogLevel } from './types';
 
-const LOG_DIR = path.join(process.cwd(), 'logs');
+interface LogRow {
+  ts: Date;
+  project_id: string;
+  row_index: number | null;
+  level: LogLevel;
+  message: string;
+  meta: Record<string, unknown>;
+}
 
-function ensureDir() {
-  if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+function rowToEntry(r: LogRow): LogEntry {
+  return {
+    ts: r.ts.toISOString(),
+    projectId: r.project_id,
+    rowIndex: r.row_index ?? undefined,
+    level: r.level,
+    message: r.message,
+    meta: r.meta,
+  };
 }
 
 export function log(
@@ -15,52 +31,44 @@ export function log(
   message: string,
   meta: Record<string, unknown> = {},
   rowIndex?: number
-) {
-  ensureDir();
-  const entry: LogEntry = {
-    ts: new Date().toISOString(),
-    projectId,
-    rowIndex,
-    level,
-    message,
-    meta,
-  };
-  const file = path.join(LOG_DIR, `${projectId}.jsonl`);
-  fs.appendFileSync(file, JSON.stringify(entry) + '\n');
-  // Also echo to console
+): void {
+  // Console echo first — useful even if the DB write fails or hasn't flushed.
   const tag = `[${projectId}${rowIndex ? `:row ${rowIndex}` : ''}]`;
   // eslint-disable-next-line no-console
   console.log(`${tag} ${level.toUpperCase()}: ${message}`, meta);
+
+  // Fire-and-forget DB write. Errors are swallowed so a logging failure can't
+  // crash the worker pipeline — the console line above is the durable record.
+  pool
+    .query(
+      `INSERT INTO logs (project_id, row_index, level, message, meta)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [projectId, rowIndex ?? null, level, message, JSON.stringify(meta)]
+    )
+    .catch((e) => {
+      // eslint-disable-next-line no-console
+      console.error(`[logger] insert failed: ${(e as Error).message}`);
+    });
 }
 
-export function readLogs(projectId: string, limit = 200): LogEntry[] {
-  ensureDir();
-  const file = path.join(LOG_DIR, `${projectId}.jsonl`);
-  if (!fs.existsSync(file)) return [];
-  const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
-  return lines
-    .slice(-limit)
-    .map((l) => {
-      try { return JSON.parse(l) as LogEntry; } catch { return null; }
-    })
-    .filter((x): x is LogEntry => !!x)
-    .reverse();
+export async function readLogs(projectId: string, limit = 200): Promise<LogEntry[]> {
+  const { rows } = await pool.query<LogRow>(
+    `SELECT ts, project_id, row_index, level, message, meta
+     FROM logs WHERE project_id = $1
+     ORDER BY ts DESC
+     LIMIT $2`,
+    [projectId, limit]
+  );
+  return rows.map(rowToEntry);
 }
 
-export function readAllLogs(limit = 500): LogEntry[] {
-  ensureDir();
-  if (!fs.existsSync(LOG_DIR)) return [];
-  const files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl'));
-  const all: LogEntry[] = [];
-  for (const f of files) {
-    const lines = fs
-      .readFileSync(path.join(LOG_DIR, f), 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-    for (const l of lines) {
-      try { all.push(JSON.parse(l)); } catch {}
-    }
-  }
-  return all.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
+export async function readAllLogs(limit = 500): Promise<LogEntry[]> {
+  const { rows } = await pool.query<LogRow>(
+    `SELECT ts, project_id, row_index, level, message, meta
+     FROM logs
+     ORDER BY ts DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return rows.map(rowToEntry);
 }

@@ -2,23 +2,16 @@
 import Link from 'next/link';
 import ProjectList from '@/components/ProjectList';
 import { listProjectsForUser, publicProject } from '@/lib/projects';
+import { hasServiceAccount } from '@/lib/google';
 import { auth } from '@/lib/auth';
 import { Plus, FileText } from 'lucide-react';
-import fs from 'node:fs';
-import path from 'node:path';
 
 export const dynamic = 'force-dynamic';
-
-function hasServiceAccount() {
-  const p = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE || './config/service-account.json';
-  const full = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
-  return fs.existsSync(full);
-}
 
 export default async function WpPublisherPage() {
   const session = await auth();
   const projects = (await listProjectsForUser(session?.user?.email)).map(publicProject);
-  const configured = hasServiceAccount();
+  const configured = await hasServiceAccount();
   const pollMins = process.env.POLL_INTERVAL_MINUTES || 5;
 
   return (

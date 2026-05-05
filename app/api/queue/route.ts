@@ -24,9 +24,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    const queue = (await fetchQueue(project)).filter(
-      (r) => !hasProcessed(project.id, r.rowIndex)
+    const queueRows = await fetchQueue(project);
+    const checks = await Promise.all(
+      queueRows.map((r) => hasProcessed(project.id, r.rowIndex))
     );
+    const queue = queueRows.filter((_, i) => !checks[i]);
     return NextResponse.json({ queue });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

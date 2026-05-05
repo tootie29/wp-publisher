@@ -10,8 +10,8 @@ function normalizeContentMode(raw: string): ContentMode {
   return 'new';
 }
 
-function sheets(): sheets_v4.Sheets {
-  return google.sheets({ version: 'v4', auth: getAuth() });
+async function sheets(): Promise<sheets_v4.Sheets> {
+  return google.sheets({ version: 'v4', auth: await getAuth() });
 }
 
 // A1 column letter → 0-based index (supports A..ZZ)
@@ -37,7 +37,7 @@ interface CellData {
  * for cells that are text-links (like "Link" pointing to a Google Doc).
  */
 export async function fetchAllCells(project: ProjectConfig): Promise<CellData[][]> {
-  const api = sheets();
+  const api = await sheets();
   const res = await api.spreadsheets.get({
     spreadsheetId: project.sheet.sheetId,
     includeGridData: true,
@@ -149,7 +149,7 @@ export async function setRowStatus(
   rowIndex: number,
   value: string
 ): Promise<void> {
-  const api = sheets();
+  const api = await sheets();
   await api.spreadsheets.values.update({
     spreadsheetId: project.sheet.sheetId,
     range: range(project.sheet.tabName, project.sheet.columns.status, rowIndex),

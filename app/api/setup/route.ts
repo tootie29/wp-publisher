@@ -1,54 +1,58 @@
 // app/api/setup/route.ts
+// Manage the GCP service account key — stored encrypted in the `service_account`
+// table. Auth-gated: only signed-in users on the allowlist may upload/delete.
 import { NextResponse } from 'next/server';
-import fs from 'node:fs';
-import path from 'node:path';
-import { getServiceAccountEmail } from '@/lib/google';
+import { auth } from '@/lib/auth';
+import {
+  deleteServiceAccount,
+  getServiceAccountEmail,
+  hasServiceAccount,
+  saveServiceAccount,
+} from '@/lib/google';
 
 export const dynamic = 'force-dynamic';
 
-function keyFilePath() {
-  const p = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE || './config/service-account.json';
-  return path.isAbsolute(p) ? p : path.join(process.cwd(), p);
+async function requireAuth() {
+  const session = await auth();
+  if (!session?.user?.email) {
+    return NextResponse.json({ ok: false, error: 'Not authenticated' }, { status: 401 });
+  }
+  return null;
 }
 
 export async function GET() {
-  const file = keyFilePath();
-  const exists = fs.existsSync(file);
-  let email: string | null = null;
-  let valid = false;
-  if (exists) {
-    try {
-      email = getServiceAccountEmail();
-      valid = !!email;
-    } catch {}
-  }
-  return NextResponse.json({ exists, valid, email });
+  const exists = await hasServiceAccount();
+  const email = exists ? await getServiceAccountEmail() : null;
+  return NextResponse.json({ exists, valid: !!email, email });
 }
 
 // Upload/replace the service account JSON
 export async function POST(req: Request) {
+  const unauth = await requireAuth();
+  if (unauth) return unauth;
+
   try {
     const body = (await req.json()) as { json: string };
     if (!body.json) {
       return NextResponse.json({ ok: false, error: 'json field required' }, { status: 400 });
     }
-    // Validate JSON and that it looks like a service account key
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(body.json);
     } catch {
       return NextResponse.json({ ok: false, error: 'File is not valid JSON' }, { status: 400 });
     }
-    if (parsed.type !== 'service_account' || !parsed.client_email || !parsed.private_key) {
+    if (
+      parsed.type !== 'service_account' ||
+      typeof parsed.client_email !== 'string' ||
+      typeof parsed.private_key !== 'string'
+    ) {
       return NextResponse.json(
         { ok: false, error: 'This does not look like a Google service account key file.' },
         { status: 400 }
       );
     }
-    const file = keyFilePath();
-    const dir = path.dirname(file);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(parsed, null, 2));
+    await saveServiceAccount(parsed as Parameters<typeof saveServiceAccount>[0]);
     return NextResponse.json({ ok: true, email: parsed.client_email });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
@@ -56,7 +60,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE() {
-  const file = keyFilePath();
-  if (fs.existsSync(file)) fs.unlinkSync(file);
+  const unauth = await requireAuth();
+  if (unauth) return unauth;
+
+  await deleteServiceAccount();
   return NextResponse.json({ ok: true });
 }

@@ -8,7 +8,8 @@
     "start": "next start -p 3030",
     "worker": "node --loader ts-node/esm lib/worker-cli.ts",
     "db:init": "tsx scripts/init-db.ts",
-    "db:migrate-json": "tsx scripts/migrate-json-to-db.ts"
+    "db:migrate-json": "tsx scripts/migrate-json-to-db.ts",
+    "db:migrate-state": "tsx scripts/migrate-state-to-db.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

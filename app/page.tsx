@@ -3,22 +3,14 @@ import Link from 'next/link';
 import { listProjectsForUser } from '@/lib/projects';
 import { auth } from '@/lib/auth';
 import { getServiceAccountEmail } from '@/lib/google';
-import fs from 'node:fs';
-import path from 'node:path';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
 
-function hasServiceAccount() {
-  const p = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE || './config/service-account.json';
-  const full = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
-  return fs.existsSync(full);
-}
-
 export default async function Home() {
   const session = await auth();
   const projects = await listProjectsForUser(session?.user?.email);
-  const sa = hasServiceAccount() ? getServiceAccountEmail() : null;
+  const sa = await getServiceAccountEmail();
   const configured = !!sa;
 
   return (

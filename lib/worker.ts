@@ -12,18 +12,18 @@ import type { ProjectConfig, QueueRow } from './types';
 export async function processRow(project: ProjectConfig, row: QueueRow, runnerEmail: string) {
   const { rowIndex } = row;
 
-  if (hasProcessed(project.id, rowIndex)) {
+  if (await hasProcessed(project.id, rowIndex)) {
     // Verify the WP post still exists. If it was deleted in WordPress (and
     // the row is back to "In-Progress" in the sheet), the user clearly wants
     // it republished — drop the stale history record so we reprocess.
-    const prev = getProcessedRecord(project.id, rowIndex);
+    const prev = await getProcessedRecord(project.id, rowIndex);
     if (prev) {
       const stillExists = await postExists(project, prev.route, prev.wpId);
       if (stillExists) {
         log(project.id, 'info', `Row ${rowIndex} already processed, skipping.`, {}, rowIndex);
         return { skipped: true };
       }
-      removeProcessed(project.id, rowIndex);
+      await removeProcessed(project.id, rowIndex);
       log(
         project.id,
         'warn',
@@ -188,7 +188,7 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     // still mark processed locally so we don't double-publish
   }
 
-  markProcessed({
+  await markProcessed({
     projectId: project.id,
     rowIndex,
     wpId: wp.id,

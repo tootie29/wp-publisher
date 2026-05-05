@@ -1,8 +1,6 @@
 // lib/state.ts
-import fs from 'node:fs';
-import path from 'node:path';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Postgres-backed processed-row ledger. Replaces data/<id>.processed.json.
+import { pool } from './db';
 
 export interface ProcessedRecord {
   projectId: string;
@@ -10,7 +8,7 @@ export interface ProcessedRecord {
   wpId: number;
   wpLink: string;      // public URL
   editLink: string;    // wp-admin edit URL
-  processedAt: string;
+  processedAt: string; // ISO timestamp
   sourceLink: string;
   title: string;
   pageType: string;
@@ -19,65 +17,153 @@ export interface ProcessedRecord {
   status: 'success' | 'partial'; // partial = WP created but sheet writeback failed
 }
 
-function file(projectId: string) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  return path.join(DATA_DIR, `${projectId}.processed.json`);
+interface ProcessedRow {
+  project_id: string;
+  row_index: number;
+  wp_id: number;
+  wp_link: string;
+  edit_link: string;
+  processed_at: Date;
+  source_link: string;
+  title: string;
+  page_type: string;
+  route: 'post' | 'page';
+  primary_keyword: string;
+  status: 'success' | 'partial';
 }
 
-export function getProcessed(projectId: string): ProcessedRecord[] {
-  const f = file(projectId);
-  if (!fs.existsSync(f)) return [];
-  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return []; }
+function rowToRecord(r: ProcessedRow): ProcessedRecord {
+  return {
+    projectId: r.project_id,
+    rowIndex: r.row_index,
+    wpId: r.wp_id,
+    wpLink: r.wp_link,
+    editLink: r.edit_link,
+    processedAt: r.processed_at.toISOString(),
+    sourceLink: r.source_link,
+    title: r.title,
+    pageType: r.page_type,
+    route: r.route,
+    primaryKeyword: r.primary_keyword,
+    status: r.status,
+  };
 }
 
-export function hasProcessed(projectId: string, rowIndex: number): boolean {
-  return getProcessed(projectId).some((r) => r.rowIndex === rowIndex);
+export async function getProcessed(projectId: string): Promise<ProcessedRecord[]> {
+  const { rows } = await pool.query<ProcessedRow>(
+    'SELECT * FROM processed_rows WHERE project_id = $1 ORDER BY processed_at DESC',
+    [projectId]
+  );
+  return rows.map(rowToRecord);
 }
 
-export function getProcessedRecord(
+export async function hasProcessed(projectId: string, rowIndex: number): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    'SELECT 1 FROM processed_rows WHERE project_id = $1 AND row_index = $2',
+    [projectId, rowIndex]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+export async function getProcessedRecord(
   projectId: string,
   rowIndex: number
-): ProcessedRecord | null {
-  return getProcessed(projectId).find((r) => r.rowIndex === rowIndex) ?? null;
+): Promise<ProcessedRecord | null> {
+  const { rows } = await pool.query<ProcessedRow>(
+    'SELECT * FROM processed_rows WHERE project_id = $1 AND row_index = $2',
+    [projectId, rowIndex]
+  );
+  if (!rows.length) return null;
+  return rowToRecord(rows[0]);
 }
 
-export function removeProcessed(projectId: string, rowIndex: number): boolean {
-  const all = getProcessed(projectId);
-  const next = all.filter((r) => r.rowIndex !== rowIndex);
-  if (next.length === all.length) return false;
-  fs.writeFileSync(file(projectId), JSON.stringify(next, null, 2));
-  return true;
+export async function removeProcessed(projectId: string, rowIndex: number): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    'DELETE FROM processed_rows WHERE project_id = $1 AND row_index = $2',
+    [projectId, rowIndex]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
-export function markProcessed(rec: ProcessedRecord) {
-  const all = getProcessed(rec.projectId);
-  all.push(rec);
-  fs.writeFileSync(file(rec.projectId), JSON.stringify(all, null, 2));
+export async function clearProcessed(projectId: string): Promise<number> {
+  const { rowCount } = await pool.query(
+    'DELETE FROM processed_rows WHERE project_id = $1',
+    [projectId]
+  );
+  return rowCount ?? 0;
 }
 
-// Most recent first
-export function recentProcessed(projectId: string, limit = 50): ProcessedRecord[] {
-  return getProcessed(projectId)
-    .slice()
-    .sort((a, b) => b.processedAt.localeCompare(a.processedAt))
-    .slice(0, limit);
+export async function markProcessed(rec: ProcessedRecord): Promise<void> {
+  await pool.query(
+    `INSERT INTO processed_rows (
+      project_id, row_index, wp_id, wp_link, edit_link, processed_at,
+      source_link, title, page_type, route, primary_keyword, status
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (project_id, row_index) DO UPDATE SET
+      wp_id           = EXCLUDED.wp_id,
+      wp_link         = EXCLUDED.wp_link,
+      edit_link       = EXCLUDED.edit_link,
+      processed_at    = EXCLUDED.processed_at,
+      source_link     = EXCLUDED.source_link,
+      title           = EXCLUDED.title,
+      page_type       = EXCLUDED.page_type,
+      route           = EXCLUDED.route,
+      primary_keyword = EXCLUDED.primary_keyword,
+      status          = EXCLUDED.status`,
+    [
+      rec.projectId,
+      rec.rowIndex,
+      rec.wpId,
+      rec.wpLink,
+      rec.editLink,
+      rec.processedAt,
+      rec.sourceLink,
+      rec.title,
+      rec.pageType,
+      rec.route,
+      rec.primaryKeyword,
+      rec.status,
+    ]
+  );
 }
 
-// Last run summary
+export async function recentProcessed(
+  projectId: string,
+  limit = 50
+): Promise<ProcessedRecord[]> {
+  const { rows } = await pool.query<ProcessedRow>(
+    `SELECT * FROM processed_rows
+     WHERE project_id = $1
+     ORDER BY processed_at DESC
+     LIMIT $2`,
+    [projectId, limit]
+  );
+  return rows.map(rowToRecord);
+}
+
 export interface RunSummary {
   lastRunAt: string | null;
   recentSuccessCount: number;    // published in last hour
   totalPublished: number;
 }
 
-export function runSummary(projectId: string): RunSummary {
-  const all = getProcessed(projectId);
-  if (all.length === 0) return { lastRunAt: null, recentSuccessCount: 0, totalPublished: 0 };
-  const sorted = all.slice().sort((a, b) => b.processedAt.localeCompare(a.processedAt));
-  const lastRunAt = sorted[0].processedAt;
-  const hourAgo = Date.now() - 60 * 60 * 1000;
-  const recentSuccessCount = all.filter(
-    (r) => new Date(r.processedAt).getTime() > hourAgo
-  ).length;
-  return { lastRunAt, recentSuccessCount, totalPublished: all.length };
+export async function runSummary(projectId: string): Promise<RunSummary> {
+  const { rows } = await pool.query<{
+    last_run_at: Date | null;
+    recent: string;
+    total: string;
+  }>(
+    `SELECT
+       MAX(processed_at) AS last_run_at,
+       COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '1 hour') AS recent,
+       COUNT(*) AS total
+     FROM processed_rows WHERE project_id = $1`,
+    [projectId]
+  );
+  const r = rows[0];
+  return {
+    lastRunAt: r.last_run_at ? r.last_run_at.toISOString() : null,
+    recentSuccessCount: parseInt(r.recent, 10) || 0,
+    totalPublished: parseInt(r.total, 10) || 0,
+  };
 }
