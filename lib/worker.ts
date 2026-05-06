@@ -97,29 +97,32 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     (row.primaryKeyword || '').trim() ||
     'Untitled';
 
-  const isRefresh = row.contentMode === 'refresh';
-
-  if (isRefresh && !row.targetUrl && !row.primaryKeyword) {
-    log(project.id, 'error',
-      `Row ${rowIndex} marked "Content Refresh" but has no Target URL and no Primary Keyword to match against. ` +
-      `Add either a target URL or a keyword that matches the existing post's title.`,
-      {}, rowIndex);
-    return { error: 'Refresh row missing both target URL and keyword' };
+  // Always try to find an existing post first to avoid duplicates. Use the
+  // explicit Target URL when provided; otherwise match by Primary Keyword
+  // (the row's title). Only create a new draft if neither lookup hits.
+  // The Content Type column is now informational only — every row is an
+  // upsert.
+  let found: Awaited<ReturnType<typeof findPostByUrl>> = null;
+  if (row.targetUrl) {
+    found = await findPostByUrl(project, row.targetUrl);
+  }
+  if (!found && row.primaryKeyword) {
+    found = await findPostByTitle(project, row.primaryKeyword);
   }
 
   updateLiveState({
     running: true, projectId: project.id, rowIndex,
     phase: 'publishing',
-    message: isRefresh
-      ? `Refreshing existing ${route} in WordPress: "${title}"`
+    message: found
+      ? `Updating existing ${found.type} in WordPress: "${title}"`
       : `Creating ${route} in WordPress: "${title}"`,
   });
 
   log(project.id, 'info',
-    isRefresh
-      ? `Refreshing existing WP ${route} from ${row.targetUrl}: "${title}"`
-      : `Publishing to WP as ${route}: "${title}"`,
-    { route, sourceType: extracted.sourceType, mode: row.contentMode },
+    found
+      ? `Matched existing ${found.type} ${found.id} — updating: ${found.link}`
+      : `No existing match for "${title}" — creating new ${route}`,
+    { route, sourceType: extracted.sourceType, mode: row.contentMode, wpId: found?.id ?? null, lookupTitle: row.primaryKeyword || null, targetUrl: row.targetUrl || null },
     rowIndex
   );
 
@@ -127,42 +130,13 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
 
   let wp;
   try {
-    if (isRefresh) {
-      // Try to locate the existing post: explicit Target URL first, then
-      // by title (Primary Keyword). If nothing matches, fall back to
-      // creating a NEW draft using the project's page-type routing
-      // (Blog → post, Cluster/Resource/etc → page).
-      let found = null as Awaited<ReturnType<typeof findPostByUrl>>;
-      if (row.targetUrl) {
-        found = await findPostByUrl(project, row.targetUrl);
-      } else {
-        const lookupTitle = row.primaryKeyword || extracted.title;
-        if (lookupTitle) {
-          found = await findPostByTitle(project, lookupTitle);
-        }
-      }
-
-      if (found) {
-        log(project.id, 'info',
-          `Matched existing ${found.type} ${found.id} for refresh: ${found.link}`,
-          { wpId: found.id }, rowIndex
-        );
-        wp = await updatePost(project, found.type, found.id, gutenberg, title);
-      } else {
-        log(project.id, 'warn',
-          `No existing WP ${route} found for "${title}" — creating a NEW ${route} draft instead.`,
-          { route, lookupTitle: row.primaryKeyword || extracted.title, targetUrl: row.targetUrl || null },
-          rowIndex
-        );
-        wp = await createDraft(project, route, title, gutenberg);
-      }
-    } else {
-      wp = await createDraft(project, route, title, gutenberg);
-    }
+    wp = found
+      ? await updatePost(project, found.type, found.id, gutenberg, title)
+      : await createDraft(project, route, title, gutenberg);
   } catch (e) {
     log(project.id, 'error',
-      isRefresh
-        ? `WP refresh failed: ${(e as Error).message}`
+      found
+        ? `WP update failed: ${(e as Error).message}`
         : `WP publish failed: ${(e as Error).message}`,
       {}, rowIndex
     );
