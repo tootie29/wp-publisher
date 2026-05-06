@@ -15,7 +15,7 @@ export async function GET() {
   if (!session?.user?.email) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
-  const job = takeNextJobForOwner(userKey(session.user.email));
+  const job = await takeNextJobForOwner(userKey(session.user.email));
   if (!job) return new NextResponse(null, { status: 204 });
   return NextResponse.json(job);
 }

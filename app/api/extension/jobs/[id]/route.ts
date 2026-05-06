@@ -19,7 +19,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     title?: string;
     error?: string;
   };
-  const ok = completeJob(
+  const ok = await completeJob(
     params.id,
     userKey(session.user.email),
     body.html,

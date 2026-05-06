@@ -372,7 +372,6 @@ async function extractWithConnectorCookies(
   try {
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(2500);
 
     if (/\/(login|sign-?in|sign_in)/i.test(page.url())) {
       throw new Error(
@@ -380,7 +379,12 @@ async function extractWithConnectorCookies(
       );
     }
 
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    // Surfer's SPA hydrates 3–5s after DOMContentLoaded; wait for the editor
+    // element rather than a fixed timeout so slow loads don't return empty.
+    await page
+      .waitForSelector('.ProseMirror, [contenteditable="true"]', { timeout: 30000 })
+      .catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
     const result = await page.evaluate(() => {
       const candidates = [
@@ -501,25 +505,11 @@ export async function extractContent(
   const kind = classifyLink(url);
   if (kind === 'gdoc') return extractFromGoogleDoc(url);
 
-  if (kind === 'surfer') {
-    // Prefer the new connector-based path (headless, deployable). Fall back to
-    // the legacy headful Playwright login if a per-project profile exists.
-    const { loadCookies } = await import('./connector');
-    const { userKey } = await import('./users');
-    if (await loadCookies(userKey(runnerEmail), projectId, 'surfer')) {
-      return extractFromSurferViaConnector(projectId, url, runnerEmail);
-    }
-    if (hasProfile(projectId)) return extractFromSurfer(projectId, url);
-    throw new Error(
-      'No Surfer connection for this user. Install the WP Publisher Connector extension and click "Connect Surfer" on this project page.'
-    );
-  }
-
-  if (kind === 'frase') {
-    // Frase aggressively bot-detects headless Chromium even with full cookie
-    // + localStorage replay, so always go through the extension fetch path.
-    return extractViaExtensionFetch(url, 'frase', runnerEmail);
-  }
+  // Both SaaS sources go through the extension fetch path — it works on
+  // Vercel (no Chromium binary needed) and uses the user's real browser
+  // session, so no server-side cookie replay or bot-detection issues.
+  if (kind === 'surfer') return extractViaExtensionFetch(url, 'surfer', runnerEmail);
+  if (kind === 'frase') return extractViaExtensionFetch(url, 'frase', runnerEmail);
 
   throw new Error(`Don't know how to extract from ${url}`);
 }
