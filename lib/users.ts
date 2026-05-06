@@ -12,11 +12,12 @@ export function userKey(email: string | null | undefined): string {
     .replace(/^-+|-+$/g, '');
 }
 
+// All authenticated team members can act on any project. `ownerEmail` is
+// retained on the project record so cron knows whose extension session to
+// use as the runner for Surfer/Frase fetches, but it no longer gates ACL.
 export function ownsProject(
-  ownerEmail: string | null | undefined,
+  _ownerEmail: string | null | undefined,
   viewerEmail: string | null | undefined
 ): boolean {
-  if (!ownerEmail) return true; // legacy / shared
-  if (!viewerEmail) return false;
-  return ownerEmail.toLowerCase() === viewerEmail.toLowerCase();
+  return !!viewerEmail;
 }

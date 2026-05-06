@@ -64,19 +64,13 @@ export async function getProject(id: string): Promise<ProjectConfig | null> {
   return rowToProject(rows[0]);
 }
 
-// Projects with no owner_email are legacy/shared (visible to everyone) until
-// a creator claims them via re-save. Otherwise scoped to the signed-in user.
+// All authenticated team members see every project — projects are shared
+// across the team to avoid duplicate setup. The `email` parameter is kept
+// for API compatibility / future per-user filtering but is currently ignored.
 export async function listProjectsForUser(
-  email: string | null | undefined
+  _email: string | null | undefined
 ): Promise<ProjectConfig[]> {
-  const me = (email || '').toLowerCase();
-  const { rows } = await pool.query<ProjectRow>(
-    `SELECT * FROM projects
-     WHERE owner_email IS NULL OR LOWER(owner_email) = $1
-     ORDER BY name`,
-    [me]
-  );
-  return rows.map(rowToProject);
+  return listProjects();
 }
 
 // Strips secrets — safe for serialization to the dashboard UI.
