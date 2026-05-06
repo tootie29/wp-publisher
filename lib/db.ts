@@ -21,6 +21,10 @@ function makePool(): Pool {
   return new Pool({
     connectionString,
     ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+    // Keep the per-pool ceiling low — on Vercel every cold-started lambda
+    // creates its own pool, and Neon's free tier caps concurrent connections.
+    max: 5,
+    idleTimeoutMillis: 10_000,
   });
 }
 
