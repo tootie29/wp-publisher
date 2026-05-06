@@ -29,7 +29,7 @@ const els = {
 };
 
 let state = {
-  appUrl: 'http://localhost:3030',
+  appUrl: 'https://wp-publisher-two.vercel.app',
   projectId: null,
 };
 

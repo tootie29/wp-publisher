@@ -7,7 +7,8 @@
   "host_permissions": [
     "*://*.surferseo.com/*",
     "*://*.frase.io/*",
-    "http://localhost:3030/*"
+    "http://localhost:3030/*",
+    "https://wp-publisher-two.vercel.app/*"
   ],
   "optional_host_permissions": [
     "http://*/*",
@@ -24,7 +25,8 @@
     {
       "matches": [
         "http://localhost:3030/*",
-        "https://wp-publisher.entrsolutions.com/*"
+        "https://wp-publisher.entrsolutions.com/*",
+        "https://wp-publisher-two.vercel.app/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
