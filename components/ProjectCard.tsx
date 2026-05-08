@@ -904,6 +904,44 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
   );
 }
 
+// Yoast-style length scoring for SEO title and meta description.
+// SEO Title: 50–60 chars = good, 30–49 or 61–70 = mid, else bad.
+// Meta Description: 120–160 = good, 70–119 or 161–170 = mid, else bad.
+type SeoStatus = 'good' | 'mid' | 'bad';
+function scoreSeo(s: string, kind: 'title' | 'desc'): { count: number; status: SeoStatus } {
+  const count = (s || '').length;
+  if (!count) return { count: 0, status: 'bad' };
+  if (kind === 'title') {
+    if (count >= 50 && count <= 60) return { count, status: 'good' };
+    if ((count >= 30 && count < 50) || (count > 60 && count <= 70)) return { count, status: 'mid' };
+    return { count, status: 'bad' };
+  }
+  if (count >= 120 && count <= 160) return { count, status: 'good' };
+  if ((count >= 70 && count < 120) || (count > 160 && count <= 170)) return { count, status: 'mid' };
+  return { count, status: 'bad' };
+}
+
+function SeoScoreChip({ count, status }: { count: number; status: SeoStatus }) {
+  const palette: Record<SeoStatus, string> = {
+    good: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    mid: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    bad: 'bg-red-500/15 text-red-300 border-red-500/30',
+  };
+  const label: Record<SeoStatus, string> = {
+    good: 'Passes the recommended length',
+    mid: 'Acceptable but not ideal',
+    bad: 'Fails the recommended length',
+  };
+  return (
+    <span
+      className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded border whitespace-nowrap ${palette[status]}`}
+      title={label[status]}
+    >
+      {count}
+    </span>
+  );
+}
+
 function WpPublishedTable({
   items,
   loading,
@@ -995,18 +1033,46 @@ function WpPublishedTable({
               </td>
               <td className="py-2 pr-3">
                 {it.metaTitle ? (
-                  <div className="text-white/75 text-xs line-clamp-2 break-words" title={it.metaTitle}>
-                    {it.metaTitle}
-                  </div>
+                  (() => {
+                    const s = scoreSeo(it.metaTitle, 'title');
+                    const tone =
+                      s.status === 'good'
+                        ? 'text-emerald-300'
+                        : s.status === 'mid'
+                        ? 'text-amber-300'
+                        : 'text-red-300';
+                    return (
+                      <div className="space-y-1">
+                        <div className={`${tone} text-xs line-clamp-2 break-words`} title={it.metaTitle}>
+                          {it.metaTitle}
+                        </div>
+                        <SeoScoreChip count={s.count} status={s.status} />
+                      </div>
+                    );
+                  })()
                 ) : (
                   <span className="text-white/25 text-xs">—</span>
                 )}
               </td>
               <td className="py-2 pr-3">
                 {it.metaDescription ? (
-                  <div className="text-white/60 text-xs line-clamp-3 break-words" title={it.metaDescription}>
-                    {it.metaDescription}
-                  </div>
+                  (() => {
+                    const s = scoreSeo(it.metaDescription, 'desc');
+                    const tone =
+                      s.status === 'good'
+                        ? 'text-emerald-300'
+                        : s.status === 'mid'
+                        ? 'text-amber-300'
+                        : 'text-red-300';
+                    return (
+                      <div className="space-y-1">
+                        <div className={`${tone} text-xs line-clamp-3 break-words`} title={it.metaDescription}>
+                          {it.metaDescription}
+                        </div>
+                        <SeoScoreChip count={s.count} status={s.status} />
+                      </div>
+                    );
+                  })()
                 ) : (
                   <span className="text-white/25 text-xs">—</span>
                 )}
