@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, RefreshCw, CheckCircle2, AlertCircle, Loader2, ExternalLink,
   Pencil, FileText, Clock, RotateCcw, AlertTriangle, LogIn, LogOut,
@@ -600,7 +600,19 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
         {tab === 'queue' && <QueueTable queue={queue} project={project} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
         {tab === 'drafts' && <DraftsTable published={published} />}
         {tab === 'published' && (
-          <WpPublishedTable items={wpPublished} loading={wpPublishedLoading} error={wpPublishedError} />
+          <WpPublishedTable
+            projectId={project.id}
+            items={wpPublished}
+            loading={wpPublishedLoading}
+            error={wpPublishedError}
+            onItemUpdated={(updated) => {
+              setWpPublished((curr) =>
+                (curr || []).map((row) =>
+                  row.id === updated.id && row.type === updated.type ? { ...row, ...updated } : row
+                )
+              );
+            }}
+          />
         )}
       </div>
     </div>
@@ -942,16 +954,154 @@ function SeoScoreChip({ count, status }: { count: number; status: SeoStatus }) {
   );
 }
 
+type EditableField = 'metaTitle' | 'metaDescription' | 'keyword';
+
+function EditableSeoCell({
+  value,
+  field,
+  multiline,
+  placeholder,
+  onSave,
+  renderDisplay,
+}: {
+  value: string;
+  field: EditableField;
+  multiline?: boolean;
+  placeholder: string;
+  onSave: (next: string) => Promise<void>;
+  renderDisplay: (value: string) => React.ReactNode;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const [savingError, setSavingError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  async function commit() {
+    if (!editing) return;
+    const next = (draft || '').trim();
+    setEditing(false);
+    if (next === (value || '').trim()) return; // no change
+    setSaving(true);
+    setSavingError(null);
+    try {
+      await onSave(next);
+    } catch (e) {
+      setSavingError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    const sharedProps = {
+      ref: inputRef as React.RefObject<HTMLInputElement & HTMLTextAreaElement>,
+      value: draft,
+      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+        setDraft(e.target.value),
+      onBlur: commit,
+      onKeyDown: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        if (e.key === 'Escape') {
+          setDraft(value);
+          setEditing(false);
+        } else if (e.key === 'Enter' && !multiline) {
+          e.preventDefault();
+          (e.target as HTMLElement).blur();
+        }
+      },
+      placeholder,
+      className:
+        'w-full bg-white/[0.06] border border-blue-400/40 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-400/80',
+    };
+    return multiline ? (
+      <textarea rows={3} {...sharedProps} />
+    ) : (
+      <input type="text" {...sharedProps} />
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setEditing(true);
+        }
+      }}
+      className={`group cursor-text rounded px-1 -mx-1 transition ${
+        saving ? 'opacity-60' : 'hover:bg-white/[0.04]'
+      }`}
+      title={`Click to edit ${field === 'keyword' ? 'focus keyphrase' : field === 'metaTitle' ? 'SEO title' : 'meta description'}`}
+    >
+      {renderDisplay(value)}
+      {saving && (
+        <div className="text-[10px] text-blue-300 inline-flex items-center gap-1 mt-1">
+          <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+        </div>
+      )}
+      {savingError && (
+        <div className="text-[10px] text-red-300 mt-1 break-words" title={savingError}>
+          Save failed: {savingError.slice(0, 80)}
+          {savingError.length > 80 ? '…' : ''}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WpPublishedTable({
+  projectId,
   items,
   loading,
   error,
+  onItemUpdated,
 }: {
+  projectId: string;
   items: WpPublishedRow[] | null;
   loading: boolean;
   error: string | null;
+  onItemUpdated: (row: WpPublishedRow) => void;
 }) {
   const [q, setQ] = useState('');
+
+  async function saveField(it: WpPublishedRow, field: EditableField, next: string) {
+    const res = await fetch(`/api/projects/${projectId}/wp-published/${it.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: it.type, [field]: next }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      metaTitle?: string;
+      metaDescription?: string;
+      keyword?: string;
+    };
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    onItemUpdated({
+      ...it,
+      metaTitle: typeof data.metaTitle === 'string' ? data.metaTitle : it.metaTitle,
+      metaDescription:
+        typeof data.metaDescription === 'string' ? data.metaDescription : it.metaDescription,
+      keyword: typeof data.keyword === 'string' ? data.keyword : it.keyword,
+    });
+  }
   const filtered = useMemo(() => {
     if (!items) return null;
     const needle = q.trim().toLowerCase();
@@ -1032,9 +1182,14 @@ function WpPublishedTable({
                 </div>
               </td>
               <td className="py-2 pr-3">
-                {it.metaTitle ? (
-                  (() => {
-                    const s = scoreSeo(it.metaTitle, 'title');
+                <EditableSeoCell
+                  value={it.metaTitle}
+                  field="metaTitle"
+                  placeholder="Add SEO title"
+                  onSave={(next) => saveField(it, 'metaTitle', next)}
+                  renderDisplay={(v) => {
+                    if (!v) return <span className="text-white/25 text-xs">— click to add</span>;
+                    const s = scoreSeo(v, 'title');
                     const tone =
                       s.status === 'good'
                         ? 'text-emerald-300'
@@ -1043,21 +1198,25 @@ function WpPublishedTable({
                         : 'text-red-300';
                     return (
                       <div className="space-y-1">
-                        <div className={`${tone} text-xs line-clamp-2 break-words`} title={it.metaTitle}>
-                          {it.metaTitle}
+                        <div className={`${tone} text-xs line-clamp-2 break-words`} title={v}>
+                          {v}
                         </div>
                         <SeoScoreChip count={s.count} status={s.status} />
                       </div>
                     );
-                  })()
-                ) : (
-                  <span className="text-white/25 text-xs">—</span>
-                )}
+                  }}
+                />
               </td>
               <td className="py-2 pr-3">
-                {it.metaDescription ? (
-                  (() => {
-                    const s = scoreSeo(it.metaDescription, 'desc');
+                <EditableSeoCell
+                  value={it.metaDescription}
+                  field="metaDescription"
+                  multiline
+                  placeholder="Add meta description"
+                  onSave={(next) => saveField(it, 'metaDescription', next)}
+                  renderDisplay={(v) => {
+                    if (!v) return <span className="text-white/25 text-xs">— click to add</span>;
+                    const s = scoreSeo(v, 'desc');
                     const tone =
                       s.status === 'good'
                         ? 'text-emerald-300'
@@ -1066,25 +1225,36 @@ function WpPublishedTable({
                         : 'text-red-300';
                     return (
                       <div className="space-y-1">
-                        <div className={`${tone} text-xs line-clamp-3 break-words`} title={it.metaDescription}>
-                          {it.metaDescription}
+                        <div className={`${tone} text-xs line-clamp-3 break-words`} title={v}>
+                          {v}
                         </div>
                         <SeoScoreChip count={s.count} status={s.status} />
                       </div>
                     );
-                  })()
-                ) : (
-                  <span className="text-white/25 text-xs">—</span>
-                )}
+                  }}
+                />
               </td>
               <td className="py-2 pr-3 text-xs">
-                {it.keyword ? (
-                  <span className="text-emerald-300/90 line-clamp-2 break-words" title={it.keyword}>
-                    {it.keyword}
-                  </span>
-                ) : (
-                  <span className="text-white/25" title="Install the WP Publisher Yoast plugin on the WP site to expose focus keyphrases for all posts.">—</span>
-                )}
+                <EditableSeoCell
+                  value={it.keyword}
+                  field="keyword"
+                  placeholder="Add focus keyphrase"
+                  onSave={(next) => saveField(it, 'keyword', next)}
+                  renderDisplay={(v) =>
+                    v ? (
+                      <span className="text-emerald-300/90 line-clamp-2 break-words" title={v}>
+                        {v}
+                      </span>
+                    ) : (
+                      <span
+                        className="text-white/25"
+                        title="Click to add a focus keyphrase. Requires the WP Publisher Yoast mu-plugin on the WP site."
+                      >
+                        — click to add
+                      </span>
+                    )
+                  }
+                />
               </td>
               <td className="py-2 pr-3">
                 <div className="flex gap-3 text-xs flex-wrap">

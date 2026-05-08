@@ -198,6 +198,46 @@ export async function updatePost(
   return { id: data.id, link: data.link, editLink };
 }
 
+// Update Yoast SEO meta (title, description, focus keyphrase) on an
+// existing post or page. Requires the `wp-publisher-yoast-rest.php`
+// mu-plugin on the WP site so the meta keys accept REST writes.
+// Pass `undefined` to leave a field untouched; pass `''` to clear.
+export async function updateYoastMeta(
+  project: ProjectConfig,
+  route: PageTypeRoute,
+  postId: number,
+  fields: { metaTitle?: string; metaDescription?: string; keyword?: string }
+): Promise<{ metaTitle: string; metaDescription: string; keyword: string }> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const path = route === 'post' ? 'posts' : 'pages';
+  const meta: Record<string, string> = {};
+  if (fields.metaTitle !== undefined) meta['_yoast_wpseo_title'] = fields.metaTitle;
+  if (fields.metaDescription !== undefined) meta['_yoast_wpseo_metadesc'] = fields.metaDescription;
+  if (fields.keyword !== undefined) meta['_yoast_wpseo_focuskw'] = fields.keyword;
+  if (Object.keys(meta).length === 0) {
+    throw new Error('No fields to update');
+  }
+  const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: authHeader(project),
+    },
+    body: JSON.stringify({ meta }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`WP meta update failed (${res.status}): ${text.slice(0, 500)}`);
+  }
+  const data = (await res.json()) as { meta?: Record<string, string> };
+  const m = data.meta || {};
+  return {
+    metaTitle: m['_yoast_wpseo_title'] || '',
+    metaDescription: m['_yoast_wpseo_metadesc'] || '',
+    keyword: m['_yoast_wpseo_focuskw'] || '',
+  };
+}
+
 // Check whether a post/page with the given id still exists on the WordPress
 // site. Returns false on 404 (or trash, which the REST API also returns 404
 // for unless ?context=edit). Used to auto-clean stale local history when
