@@ -126,6 +126,18 @@ export async function extractFromGoogleDoc(url: string): Promise<ExtractedConten
 
 /* -------------------- Browser-based (Surfer / Frase) -------------------- */
 
+// Promote the first <h1> in `html` to the post title and drop it from the
+// body. Surfer/Frase writers always put the canonical article title in the
+// first H1 — without this the WordPress post would show the title twice
+// (once as post_title, once at the top of the body).
+function promoteFirstH1ToTitle(html: string, fallback: string): { title: string; html: string } {
+  const m = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (!m) return { title: fallback, html };
+  const title = m[1].replace(/<[^>]+>/g, '').trim();
+  if (!title) return { title: fallback, html };
+  return { title, html: html.replace(m[0], '') };
+}
+
 async function launchPersistentContext(projectId: string, headless: boolean) {
   const { chromium } = await import('playwright');
   const dir = profileDir(projectId);
@@ -287,9 +299,13 @@ export async function extractFromSurfer(
       );
     }
 
+    // No fallback title here — if the article has no <h1>, return empty so
+    // worker.ts can fall back to the sheet's Primary Keyword. Surfer's own
+    // <title> tag is just "Surfer SEO" branding, which we don't want.
+    const promoted = promoteFirstH1ToTitle(result.html, '');
     return {
-      title: result.title,
-      htmlBody: result.html,
+      title: promoted.title,
+      htmlBody: promoted.html,
       sourceType: 'surfer',
     };
   } finally {
@@ -442,7 +458,9 @@ async function extractWithConnectorCookies(
       );
     }
 
-    return { title: result.title, htmlBody: html, sourceType: source };
+    // Empty fallback — if no <h1>, worker.ts falls back to Primary Keyword.
+    const promoted = promoteFirstH1ToTitle(html, '');
+    return { title: promoted.title, htmlBody: promoted.html, sourceType: source };
   } finally {
     await context.close();
     await browser.close();
@@ -476,23 +494,18 @@ async function extractViaExtensionFetch(
   const { enqueueFetch } = await import('./fetch-queue');
   const { userKey } = await import('./users');
   const result = await enqueueFetch(url, source, userKey(runnerEmail));
-  const html = typeof result?.html === 'string' ? result.html : '';
-  const extTitle = typeof result?.title === 'string' ? result.title : '';
+  const rawHtml = typeof result?.html === 'string' ? result.html : '';
 
-  if (!html) {
+  if (!rawHtml) {
     throw new Error('Extension returned no HTML for this URL');
   }
 
-  let title = extTitle.trim();
-  if (!title) {
-    const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    const stripTags = (s: string) => s.replace(/<[^>]+>/g, '').trim();
-    title =
-      (titleMatch && stripTags(titleMatch[1])) ||
-      (titleTag && stripTags(titleTag[1]).split(/[–|-]/)[0].trim()) ||
-      '';
-  }
+  // First <h1> is the article's canonical title — promote it to post_title
+  // and strip it from the body so the published WP post doesn't show the
+  // title twice. If no <h1> exists, return empty title so worker.ts falls
+  // back to the sheet's Primary Keyword (the source's own <title> is just
+  // "Frase" / "Surfer SEO" branding and never useful as a post title).
+  const { title, html } = promoteFirstH1ToTitle(rawHtml, '');
 
   return { title, htmlBody: html, sourceType: source };
 }
