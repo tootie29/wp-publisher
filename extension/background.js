@@ -158,6 +158,20 @@ async function waitForContent(tabId, maxMs) {
       const results = await chrome.scripting.executeScript({
         target: { tabId, allFrames: true },
         func: () => {
+          // Frase/Surfer show a "This document was last edited by … —
+          // Continue editing" interstitial that overlays the document and
+          // delays the editor from hydrating. Dismiss it by clicking the
+          // continue/got-it button so the real content loads.
+          const dismissLabels = ['continue editing', 'got it', 'open editor', 'edit document'];
+          for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+            const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            if (!t || t.length > 30) continue; // skip long paragraphs that merely contain the phrase
+            if (dismissLabels.some((l) => t === l || t.startsWith(l))) {
+              try { el.click(); } catch {}
+              break;
+            }
+          }
+
           const selectors = [
             '.ProseMirror',
             '.tiptap.ProseMirror',
