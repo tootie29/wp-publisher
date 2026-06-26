@@ -4,9 +4,9 @@
 // We open the URL in a hidden background tab, wait for the SPA to render,
 // scrape the article DOM, then close the tab.
 
-const RENDER_TIMEOUT_MS = 25000;  // poll for content up to this long
+const RENDER_TIMEOUT_MS = 45000;  // poll for content up to this long (Surfer can be slow)
 const POLL_INTERVAL_MS = 1000;    // how often to check the tab for content
-const NAV_TIMEOUT_MS = 30000;     // max wait for the tab to finish loading
+const NAV_TIMEOUT_MS = 35000;     // max wait for the tab to finish loading
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'fetch-source') {
@@ -115,7 +115,7 @@ async function handleFetchSource(msg) {
 
     if (!html) {
       return {
-        error: `Could not find article content on the ${source} page. The page type may not be supported, or the SPA didn't finish rendering in ${RENDER_DELAY_MS / 1000}s.`,
+        error: `Could not find article content on the ${source} page. The page type may not be supported, or the SPA didn't finish rendering in ${RENDER_TIMEOUT_MS / 1000}s.`,
       };
     }
 

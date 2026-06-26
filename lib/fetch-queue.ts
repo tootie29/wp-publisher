@@ -24,7 +24,11 @@ export interface ImageFetchResult {
   contentType: string;
 }
 
-const TIMEOUT_MS = 60_000;
+// Allow for a slow Surfer/Frase SPA: the extension waits up to ~35s for nav
+// plus ~45s for the editor to render before scraping, so the server must wait
+// longer than that for the job to come back. Safe now that the worker function
+// runs up to 300s.
+const TIMEOUT_MS = 120_000;
 const IMAGE_TIMEOUT_MS = 30_000;
 const POLL_MS = 1000;
 
