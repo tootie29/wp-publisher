@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3030",
-    "prebuild": "tsx scripts/init-db.ts",
     "build": "next build",
     "start": "next start -p 3030",
     "worker": "node --loader ts-node/esm lib/worker-cli.ts",
