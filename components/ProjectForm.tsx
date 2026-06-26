@@ -208,14 +208,20 @@ export default function ProjectForm({ initial, mode }: Props) {
         </Field>
         <Field
           label="Application password"
-          hint="WP admin → Users → Profile → Application Passwords. Paste the 24-char password (spaces OK)."
+          hint={
+            mode === 'edit'
+              ? 'Already saved — leave blank to keep it. Only type here to replace it. "Test now" uses the saved password automatically.'
+              : 'WP admin → Users → Profile → Application Passwords. Paste the 24-char password (spaces OK).'
+          }
         >
           <input
             type="password"
             value={cfg.wordpress.appPassword}
             onChange={(e) => updateWp('appPassword', e.target.value)}
             className={inputClass + ' font-mono'}
-            placeholder="xxxx xxxx xxxx xxxx xxxx xxxx"
+            placeholder={
+              mode === 'edit' ? '•••••••••••• (saved — leave blank to keep)' : 'xxxx xxxx xxxx xxxx xxxx xxxx'
+            }
           />
         </Field>
         <Field label="Publish status" hint="'draft' is safest — you review in WP admin before going live">

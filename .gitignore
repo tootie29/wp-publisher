@@ -16,3 +16,5 @@ config/browser-profiles/
 .DS_Store
 .claude/
 tsconfig.tsbuildinfo
+.vercel
+.env*.local
