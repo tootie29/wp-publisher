@@ -14,8 +14,12 @@ import { updateLiveState } from '@/lib/live-state';
 import { ownsProject } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
-// Worker runs can take longer than the 10s hobby default. Pro plans cap at 300s.
-export const maxDuration = 60;
+// Worker runs are slow (each Surfer/Frase row drives the browser extension to
+// open a tab, render the SPA, and scrape). 60s only got through ~2 rows before
+// Vercel killed the function. 300s (now the max on all Vercel plans) lets a
+// single run clear many more rows. If the plan rejects 300 at build time, drop
+// this back to 60.
+export const maxDuration = 300;
 
 function isCronRequest(req: Request): boolean {
   const secret = process.env.CRON_SECRET;

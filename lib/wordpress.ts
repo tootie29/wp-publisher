@@ -113,7 +113,11 @@ export async function findPostByTitle(
     }
   }
 
-  // 2. Search fallback. Compare normalized titles and pick the closest match.
+  // 2. Search fallback — but only accept an EXACT normalized-title match.
+  // We deliberately do NOT accept a lone fuzzy search hit: WordPress search is
+  // loose (it matched "About Our Firm" for "Rapid City DUI Lawyer"), and
+  // accepting that silently overwrites an unrelated page. No exact match here
+  // means "no match" → the caller creates a new post instead.
   for (const type of ['pages', 'posts'] as const) {
     const res = await fetch(
       `${base}/wp-json/wp/v2/${type}?search=${encodeURIComponent(trimmed)}&_fields=id,link,title&per_page=20`,
@@ -129,16 +133,6 @@ export async function findPostByTitle(
         type: type === 'pages' ? 'page' : 'post',
         link: exact.link,
         title: exact.title?.rendered || '',
-      };
-    }
-    // No exact match. If only a single result came back, accept it. Multiple
-    // ambiguous matches → bail out so we don't overwrite the wrong post.
-    if (list.length === 1) {
-      return {
-        id: list[0].id,
-        type: type === 'pages' ? 'page' : 'post',
-        link: list[0].link,
-        title: list[0].title?.rendered || '',
       };
     }
   }
