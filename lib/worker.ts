@@ -2,10 +2,11 @@
 import { listProjects } from './projects';
 import { fetchQueue, setRowStatus } from './sheets';
 import { extractContent } from './extract';
-import { createDraft, findPostByTitle, findPostByUrl, postExists, resolveRoute, updatePost } from './wordpress';
+import { createDraft, findPostByTitle, findPostByUrl, getLatestPostDate, postExists, resolveRoute, updatePost, updateYoastMeta } from './wordpress';
 import { htmlToBlocks } from './blocks';
+import { uploadAndRewriteImages } from './media';
 import { log } from './logger';
-import { getProcessedRecord, hasProcessed, markProcessed, removeProcessed } from './state';
+import { getProcessedRecord, hasProcessed, latestScheduledBlogDate, markProcessed, removeProcessed } from './state';
 import { getLiveState, updateLiveState } from './live-state';
 import type { ProjectConfig, QueueRow } from './types';
 
@@ -81,20 +82,22 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
 
   const route = resolveRoute(project, row.pageType);
   // Title resolution:
-  // 1. The article's own <h1> wins — that's the canonical title written by
-  //    whoever drafted the content.
-  // 2. Fall back to the sheet's Primary Keyword column if no usable H1 was
-  //    found (or if the extractor only returned a SaaS brand name).
+  // 1. The sheet's Primary Keyword column wins — that's the title we want on
+  //    the published post/page.
+  // 2. Fall back to the article's own <h1> only when the Keyword cell is empty
+  //    (and the extractor returned something usable, not a SaaS brand name).
   // 3. Last resort: 'Untitled'. We never trust the source's <title> tag
   //    (Frase / Surfer set that to their brand name).
+  // Note: the <h1> is still stripped from the body by the extractor regardless,
+  // so WordPress (which renders post_title as the page <h1>) never shows it twice.
   const extractedClean = (extracted.title || '').trim();
   const looksGeneric =
     !extractedClean ||
     extractedClean === 'Untitled' ||
     /^(frase|surfer|surfer seo|app\.frase\.io|app\.surferseo\.com)$/i.test(extractedClean);
   const title =
-    (!looksGeneric ? extractedClean : '') ||
     (row.primaryKeyword || '').trim() ||
+    (!looksGeneric ? extractedClean : '') ||
     'Untitled';
 
   // Always try to find an existing post first to avoid duplicates. Use the
@@ -126,13 +129,62 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     rowIndex
   );
 
-  const gutenberg = htmlToBlocks(extracted.htmlBody);
+  // Pull images down to the WP media library and rewrite their src (also lifts
+  // images out of headings/text into real image blocks). Best-effort per image:
+  // any that can't be fetched/uploaded keep their original URL. For Surfer/Frase
+  // sources, session-gated images fall back to fetching via the extension.
+  const withMedia = await uploadAndRewriteImages(project, extracted.htmlBody, {
+    rowIndex,
+    source:
+      extracted.sourceType === 'surfer' || extracted.sourceType === 'frase'
+        ? extracted.sourceType
+        : undefined,
+    runnerEmail,
+  });
+
+  const gutenberg = htmlToBlocks(withMedia);
+
+  // Blog spacing — only when creating a NEW blog (post route). Each blog must
+  // land at least `blogIntervalDays` after the previous blog's slot. The
+  // previous slot is the newest of: the WP site's publish/future posts, and the
+  // slots we've already assigned to our own blog drafts (which aren't visible in
+  // the WP query because they're still drafts). We record this blog's effective
+  // slot too, so the chain keeps spacing even from a cold start / within a batch.
+  // The date is stamped on the post; its status is left as publishStatus.
+  let scheduledForIso: string | undefined;
+  let createDateGmt: string | undefined;
+  // Fall back to 7 days when the project doesn't specify a positive interval.
+  const intervalDays =
+    project.blogIntervalDays && project.blogIntervalDays > 0 ? project.blogIntervalDays : 7;
+  if (!found && route === 'post') {
+    const [wpLatest, ourLatest] = await Promise.all([
+      getLatestPostDate(project),
+      latestScheduledBlogDate(project.id),
+    ]);
+    const prevMs = Math.max(wpLatest?.getTime() ?? 0, ourLatest?.getTime() ?? 0);
+    const now = Date.now();
+    // First blog ever → publish now and set the baseline. Otherwise the next
+    // slot is interval after the previous, but never earlier than now.
+    const effectiveMs =
+      prevMs === 0 ? now : Math.max(prevMs + intervalDays * 86_400_000, now);
+    scheduledForIso = new Date(effectiveMs).toISOString();
+
+    // Only stamp a WP date when we're pushing the post into the future (small
+    // skew guard so "publish now" rows don't get a needless future date).
+    if (effectiveMs > now + 60_000) {
+      createDateGmt = new Date(effectiveMs).toISOString().slice(0, 19); // UTC, no ms/Z
+      log(project.id, 'info',
+        `Spacing blog post — previous blog slot ${new Date(prevMs).toISOString()}; ` +
+        `scheduling this one for ${scheduledForIso} (>= ${intervalDays}d apart).`,
+        { slot: scheduledForIso, intervalDays }, rowIndex);
+    }
+  }
 
   let wp;
   try {
     wp = found
       ? await updatePost(project, found.type, found.id, gutenberg, title)
-      : await createDraft(project, route, title, gutenberg);
+      : await createDraft(project, route, title, gutenberg, createDateGmt);
   } catch (e) {
     log(project.id, 'error',
       found
@@ -141,6 +193,35 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
       {}, rowIndex
     );
     return { error: (e as Error).message };
+  }
+
+  // Apply SEO meta to the post's Yoast fields:
+  //   - SEO Title / Meta Description from the content doc's label lines
+  //   - Focus keyphrase from the sheet's Primary Keyword column
+  // Best-effort: the post is already published, so a meta failure (e.g. the
+  // mu-plugin isn't installed) warns but doesn't fail the row.
+  const focusKeyphrase = (row.primaryKeyword || '').trim();
+  if (extracted.metaTitle || extracted.metaDescription || focusKeyphrase) {
+    const seoRoute = found ? found.type : route;
+    try {
+      const applied = await updateYoastMeta(project, seoRoute, wp.id, {
+        metaTitle: extracted.metaTitle,
+        metaDescription: extracted.metaDescription,
+        keyword: focusKeyphrase || undefined,
+      });
+      log(project.id, 'success', 'Set Yoast SEO meta from content doc', {
+        wpId: wp.id,
+        metaTitle: applied.metaTitle,
+        metaDescription: applied.metaDescription,
+        keyword: applied.keyword,
+      }, rowIndex);
+    } catch (e) {
+      log(project.id, 'warn',
+        `Published OK but failed to set Yoast SEO meta: ${(e as Error).message}. ` +
+        `Make sure the wp-publisher-yoast-rest mu-plugin is installed on this site.`,
+        { wpId: wp.id }, rowIndex
+      );
+    }
   }
 
   updateLiveState({
@@ -175,6 +256,7 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     route,
     primaryKeyword: row.primaryKeyword,
     status: sheetWritebackOk ? 'success' : 'partial',
+    scheduledFor: scheduledForIso,
   });
 
   log(project.id, 'success', `Published: ${title}`, {

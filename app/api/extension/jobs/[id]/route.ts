@@ -17,15 +17,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const body = (await req.json().catch(() => ({}))) as {
     html?: string;
     title?: string;
+    dataBase64?: string;
+    contentType?: string;
     error?: string;
   };
-  const ok = await completeJob(
-    params.id,
-    userKey(session.user.email),
-    body.html,
-    body.error,
-    body.title
-  );
+  const ok = await completeJob(params.id, userKey(session.user.email), {
+    html: body.html,
+    title: body.title,
+    dataBase64: body.dataBase64,
+    contentType: body.contentType,
+    error: body.error,
+  });
   if (!ok) {
     return NextResponse.json(
       { ok: false, error: 'Unknown or expired job (or wrong owner)' },

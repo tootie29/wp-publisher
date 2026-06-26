@@ -1,5 +1,6 @@
 // lib/extract.ts
 import { google } from 'googleapis';
+import * as cheerio from 'cheerio';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getAuth } from './google';
@@ -510,19 +511,85 @@ async function extractViaExtensionFetch(
   return { title, htmlBody: html, sourceType: source };
 }
 
+// Writers put SEO metadata at the top of the content doc as label lines, e.g.
+//   SEO Title: Sturgis Motorcycle Accident Lawyer | Skinner Law Office, P.C.
+//   Meta Description: Injured during the rally? ...free case review today.
+// These are NOT article body — they belong in the post's Yoast SEO fields.
+// This pulls their values out and removes the lines from the HTML so they don't
+// get published as visible paragraphs. Detection is by label prefix (the actual
+// values differ per post), and works across gdoc / Surfer / Frase since all
+// three emit these as <p> (or heading/list-item) elements.
+function stripSeoMetaLines(html: string): {
+  html: string;
+  metaTitle?: string;
+  metaDescription?: string;
+} {
+  if (!html || !html.trim()) return { html: html || '' };
+  const $ = cheerio.load(`<div id="__root">${html}</div>`);
+  const root = $('#__root').first();
+
+  let metaTitle: string | undefined;
+  let metaDescription: string | undefined;
+
+  // Only consider line-level elements — never <div>/<section> wrappers, so we
+  // don't accidentally remove a whole content block.
+  root.find('p, li, h1, h2, h3, h4, h5, h6').each((_, el) => {
+    const $el = $(el);
+    const text = $el.text().replace(/\s+/g, ' ').trim();
+
+    const titleMatch = text.match(/^(?:seo\s*title|meta\s*title)\s*[:\-–—]\s*(.+)$/i);
+    if (titleMatch) {
+      let val = titleMatch[1].trim();
+      // Guard: if a "Meta Description:" label got swept into the same line
+      // (e.g. separated by a <br>), split it back out.
+      const parts = val.split(/\bmeta\s*description\s*[:\-–—]\s*/i);
+      if (parts.length > 1) {
+        val = parts[0].trim();
+        if (!metaDescription && parts[1].trim()) metaDescription = parts[1].trim();
+      }
+      if (val) {
+        metaTitle = val;
+        $el.remove();
+      }
+      return;
+    }
+
+    const descMatch = text.match(/^(?:meta\s*description|seo\s*description|meta\s*desc)\s*[:\-–—]\s*(.+)$/i);
+    if (descMatch && descMatch[1].trim()) {
+      metaDescription = descMatch[1].trim();
+      $el.remove();
+    }
+  });
+
+  return { html: root.html() || '', metaTitle, metaDescription };
+}
+
 export async function extractContent(
   projectId: string,
   url: string,
   runnerEmail: string
 ): Promise<ExtractedContent> {
   const kind = classifyLink(url);
-  if (kind === 'gdoc') return extractFromGoogleDoc(url);
 
-  // Both SaaS sources go through the extension fetch path — it works on
-  // Vercel (no Chromium binary needed) and uses the user's real browser
-  // session, so no server-side cookie replay or bot-detection issues.
-  if (kind === 'surfer') return extractViaExtensionFetch(url, 'surfer', runnerEmail);
-  if (kind === 'frase') return extractViaExtensionFetch(url, 'frase', runnerEmail);
+  let content: ExtractedContent;
+  if (kind === 'gdoc') {
+    content = await extractFromGoogleDoc(url);
+  } else if (kind === 'surfer') {
+    // Both SaaS sources go through the extension fetch path — it works on
+    // Vercel (no Chromium binary needed) and uses the user's real browser
+    // session, so no server-side cookie replay or bot-detection issues.
+    content = await extractViaExtensionFetch(url, 'surfer', runnerEmail);
+  } else if (kind === 'frase') {
+    content = await extractViaExtensionFetch(url, 'frase', runnerEmail);
+  } else {
+    throw new Error(`Don't know how to extract from ${url}`);
+  }
 
-  throw new Error(`Don't know how to extract from ${url}`);
+  // Pull SEO Title / Meta Description label lines out of the body and surface
+  // them so the worker can write them to Yoast instead of publishing them.
+  const { html, metaTitle, metaDescription } = stripSeoMetaLines(content.htmlBody);
+  content.htmlBody = html;
+  content.metaTitle = metaTitle;
+  content.metaDescription = metaDescription;
+  return content;
 }

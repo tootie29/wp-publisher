@@ -9,12 +9,50 @@ const POLL_INTERVAL_MS = 1000;    // how often to check the tab for content
 const NAV_TIMEOUT_MS = 30000;     // max wait for the tab to finish loading
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== 'fetch-source') return false;
-  handleFetchSource(msg).then(sendResponse).catch((e) => {
-    sendResponse({ error: e?.message || String(e) });
-  });
-  return true; // keep the message channel open for the async response
+  if (msg?.type === 'fetch-source') {
+    handleFetchSource(msg).then(sendResponse).catch((e) => {
+      sendResponse({ error: e?.message || String(e) });
+    });
+    return true; // keep the message channel open for the async response
+  }
+  if (msg?.type === 'fetch-image') {
+    handleFetchImage(msg).then(sendResponse).catch((e) => {
+      sendResponse({ error: e?.message || String(e) });
+    });
+    return true;
+  }
+  return false;
 });
+
+// Fetch raw image bytes from the user's authenticated session. host_permissions
+// cover surferseo.com / frase.io, so cookies ride along and the response body
+// is readable — which is exactly what session-gated images need. Returns the
+// bytes base64-encoded so they survive the JSON round-trip back to the server.
+async function handleFetchImage(msg) {
+  const url = msg.url;
+  try {
+    const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    if (!res.ok) return { error: `Image fetch failed (${res.status})` };
+    const contentType = (res.headers.get('content-type') || '')
+      .split(';')[0]
+      .trim() || 'application/octet-stream';
+    const buf = await res.arrayBuffer();
+    if (!buf || buf.byteLength === 0) return { error: 'Empty image response' };
+    return { dataBase64: arrayBufferToBase64(buf), contentType };
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000; // avoid call-stack limits on String.fromCharCode
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 async function handleFetchSource(msg) {
   const url = msg.url;

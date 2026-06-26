@@ -32,6 +32,10 @@ export interface ProjectConfig {
   pageTypeRouting: Record<string, PageTypeRoute>;
   // Default post status on publish; 'draft' keeps it safe
   publishStatus: 'draft' | 'publish' | 'pending';
+  // Minimum days between blog (post-route) publishes. When a new blog would
+  // land sooner than this after the most recent blog, its publish date is
+  // pushed out to the next free slot. Falls back to 7 when unset or non-positive.
+  blogIntervalDays?: number;
   enabled: boolean;
   // Email of the user who created/owns this project. Existing projects without
   // this field are treated as "shared" (visible to everyone) for backward
@@ -68,4 +72,9 @@ export interface ExtractedContent {
   title: string;
   htmlBody: string;              // WP-ready HTML
   sourceType: 'gdoc' | 'frase' | 'surfer' | 'unknown';
+  // Captured from "SEO Title:" / "Meta Description:" label lines the writer
+  // puts at the top of the content doc. These are stripped out of htmlBody and
+  // written to the post's Yoast SEO fields instead. Undefined when absent.
+  metaTitle?: string;
+  metaDescription?: string;
 }

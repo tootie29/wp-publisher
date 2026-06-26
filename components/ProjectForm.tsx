@@ -47,6 +47,7 @@ function defaultConfig(): ProjectConfig {
       'resource': 'page',
     },
     publishStatus: 'draft',
+    blogIntervalDays: 7,
   };
 }
 
@@ -227,6 +228,22 @@ export default function ProjectForm({ initial, mode }: Props) {
             <option value="pending">Pending review</option>
             <option value="publish">Publish immediately</option>
           </select>
+        </Field>
+        <Field
+          label="Blog post interval (days)"
+          hint="Minimum spacing between blog (post-route) publishes. A new blog that would land sooner than this after the most recent blog gets its publish date pushed to the next free slot. Leave blank to use the default of 7 days. Only affects new posts, not page-route content or refreshes."
+        >
+          <input
+            type="number"
+            min={1}
+            value={cfg.blogIntervalDays ?? ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              update('blogIntervalDays', v === '' ? undefined : Math.max(1, parseInt(v) || 1));
+            }}
+            className={inputClass}
+            placeholder="7 (default)"
+          />
         </Field>
       </Section>
 

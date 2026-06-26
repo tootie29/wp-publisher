@@ -22,6 +22,7 @@ interface ProjectRow {
   sheet_completed_value: string;
   page_type_routing: Record<string, PageTypeRoute>;
   publish_status: ProjectConfig['publishStatus'];
+  blog_interval_days: number;
 }
 
 function rowToProject(r: ProjectRow): ProjectConfig {
@@ -45,6 +46,7 @@ function rowToProject(r: ProjectRow): ProjectConfig {
     },
     pageTypeRouting: r.page_type_routing,
     publishStatus: r.publish_status,
+    blogIntervalDays: r.blog_interval_days ?? 7,
   };
 }
 
@@ -90,6 +92,7 @@ export function publicProject(p: ProjectConfig) {
     },
     pageTypeRouting: p.pageTypeRouting,
     publishStatus: p.publishStatus,
+    blogIntervalDays: p.blogIntervalDays ?? 7,
     ownerEmail: p.ownerEmail || null,
   };
 }
@@ -159,6 +162,7 @@ export async function saveProject(
     cfg.sheet.completedValue,
     JSON.stringify(cfg.pageTypeRouting ?? {}),
     cfg.publishStatus,
+    cfg.blogIntervalDays ?? 7,
   ];
 
   await pool.query(
@@ -167,13 +171,13 @@ export async function saveProject(
       wp_base_url, wp_username, wp_app_password_encrypted,
       sheet_id, sheet_tab_name, sheet_columns, sheet_header_row,
       sheet_trigger_value, sheet_completed_value,
-      page_type_routing, publish_status
+      page_type_routing, publish_status, blog_interval_days
     ) VALUES (
       $1, $2, $3, $4,
       $5, $6, $7,
       $8, $9, $10, $11,
       $12, $13,
-      $14, $15
+      $14, $15, $16
     )
     ON CONFLICT (id) DO UPDATE SET
       name                      = EXCLUDED.name,
@@ -190,6 +194,7 @@ export async function saveProject(
       sheet_completed_value     = EXCLUDED.sheet_completed_value,
       page_type_routing         = EXCLUDED.page_type_routing,
       publish_status            = EXCLUDED.publish_status,
+      blog_interval_days        = EXCLUDED.blog_interval_days,
       updated_at                = NOW()`,
     params
   );

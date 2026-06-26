@@ -12,13 +12,20 @@ import crypto from 'node:crypto';
 import { pool } from './db';
 
 export type FetchSource = 'surfer' | 'frase';
+export type FetchKind = 'content' | 'image';
 
 export interface FetchResult {
   html: string;
   title?: string;
 }
 
+export interface ImageFetchResult {
+  dataBase64: string;
+  contentType: string;
+}
+
 const TIMEOUT_MS = 60_000;
+const IMAGE_TIMEOUT_MS = 30_000;
 const POLL_MS = 1000;
 
 export async function enqueueFetch(
@@ -73,16 +80,69 @@ export async function enqueueFetch(
   );
 }
 
+// Ask the extension to fetch raw image bytes from the user's authenticated
+// session. Used as a fallback when the server can't download an image directly
+// (e.g. Surfer/Frase serve it only to the logged-in browser). Returns base64
+// bytes + MIME type.
+export async function enqueueImageFetch(
+  url: string,
+  source: FetchSource,
+  ownerKey: string
+): Promise<ImageFetchResult> {
+  const id = crypto.randomUUID();
+  await pool.query(
+    `INSERT INTO fetch_jobs (id, url, source, owner_key, status, kind)
+     VALUES ($1, $2, $3, $4, 'pending', 'image')`,
+    [id, url, source, ownerKey]
+  );
+
+  const deadline = Date.now() + IMAGE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const r = await pool.query<{
+      status: string;
+      result_html: string | null;
+      result_content_type: string | null;
+      error: string | null;
+    }>(
+      `SELECT status, result_html, result_content_type, error
+       FROM fetch_jobs WHERE id = $1`,
+      [id]
+    );
+    const row = r.rows[0];
+    if (!row) break;
+    if (row.status === 'completed') {
+      return {
+        dataBase64: row.result_html || '',
+        contentType: row.result_content_type || 'application/octet-stream',
+      };
+    }
+    if (row.status === 'failed') {
+      throw new Error(row.error || 'Extension reported an error');
+    }
+    await sleep(POLL_MS);
+  }
+
+  await pool.query(
+    `UPDATE fetch_jobs SET status='failed', error='timed out waiting for extension', completed_at=NOW()
+     WHERE id = $1 AND status IN ('pending','taken')`,
+    [id]
+  );
+  throw new Error(
+    `Browser extension did not return the image within ${IMAGE_TIMEOUT_MS / 1000}s.`
+  );
+}
+
 // Atomically claim the oldest pending job for the requesting user.
 // FOR UPDATE SKIP LOCKED prevents two concurrent extension polls (multiple
 // open dashboard tabs in the same browser) from grabbing the same job.
 export async function takeNextJobForOwner(
   ownerKey: string
-): Promise<{ id: string; url: string; source: FetchSource } | null> {
+): Promise<{ id: string; url: string; source: FetchSource; kind: FetchKind } | null> {
   const r = await pool.query<{
     id: string;
     url: string;
     source: FetchSource;
+    kind: FetchKind;
   }>(
     `UPDATE fetch_jobs SET status='taken', taken_at=NOW()
      WHERE id = (
@@ -92,19 +152,27 @@ export async function takeNextJobForOwner(
        LIMIT 1
        FOR UPDATE SKIP LOCKED
      )
-     RETURNING id, url, source`,
+     RETURNING id, url, source, kind`,
     [ownerKey]
   );
   return r.rows[0] || null;
 }
 
+export interface CompletePayload {
+  html?: string;
+  title?: string;
+  dataBase64?: string;
+  contentType?: string;
+  error?: string;
+}
+
 export async function completeJob(
   id: string,
   ownerKey: string,
-  html?: string,
-  error?: string,
-  title?: string
+  payload: CompletePayload
 ): Promise<boolean> {
+  const { html, title, dataBase64, contentType, error } = payload;
+
   if (error) {
     const r = await pool.query(
       `UPDATE fetch_jobs SET status='failed', error=$3, completed_at=NOW()
@@ -113,6 +181,16 @@ export async function completeJob(
     );
     return (r.rowCount ?? 0) > 0;
   }
+  // Image job — base64 bytes stashed in result_html, MIME in result_content_type.
+  if (typeof dataBase64 === 'string' && dataBase64.length > 0) {
+    const r = await pool.query(
+      `UPDATE fetch_jobs SET status='completed', result_html=$3, result_content_type=$4, completed_at=NOW()
+       WHERE id=$1 AND owner_key=$2 AND status='taken'`,
+      [id, ownerKey, dataBase64, contentType || null]
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+  // Content job — scraped article HTML.
   if (typeof html === 'string' && html.length > 0) {
     const r = await pool.query(
       `UPDATE fetch_jobs SET status='completed', result_html=$3, result_title=$4, completed_at=NOW()

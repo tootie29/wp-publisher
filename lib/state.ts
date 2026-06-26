@@ -15,6 +15,7 @@ export interface ProcessedRecord {
   route: 'post' | 'page';
   primaryKeyword: string;
   status: 'success' | 'partial'; // partial = WP created but sheet writeback failed
+  scheduledFor?: string;         // ISO date we stamped on a scheduled blog draft
 }
 
 interface ProcessedRow {
@@ -30,6 +31,7 @@ interface ProcessedRow {
   route: 'post' | 'page';
   primary_keyword: string;
   status: 'success' | 'partial';
+  scheduled_for: Date | null;
 }
 
 function rowToRecord(r: ProcessedRow): ProcessedRecord {
@@ -46,6 +48,7 @@ function rowToRecord(r: ProcessedRow): ProcessedRecord {
     route: r.route,
     primaryKeyword: r.primary_keyword,
     status: r.status,
+    scheduledFor: r.scheduled_for ? r.scheduled_for.toISOString() : undefined,
   };
 }
 
@@ -97,8 +100,8 @@ export async function markProcessed(rec: ProcessedRecord): Promise<void> {
   await pool.query(
     `INSERT INTO processed_rows (
       project_id, row_index, wp_id, wp_link, edit_link, processed_at,
-      source_link, title, page_type, route, primary_keyword, status
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      source_link, title, page_type, route, primary_keyword, status, scheduled_for
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     ON CONFLICT (project_id, row_index) DO UPDATE SET
       wp_id           = EXCLUDED.wp_id,
       wp_link         = EXCLUDED.wp_link,
@@ -109,7 +112,8 @@ export async function markProcessed(rec: ProcessedRecord): Promise<void> {
       page_type       = EXCLUDED.page_type,
       route           = EXCLUDED.route,
       primary_keyword = EXCLUDED.primary_keyword,
-      status          = EXCLUDED.status`,
+      status          = EXCLUDED.status,
+      scheduled_for   = EXCLUDED.scheduled_for`,
     [
       rec.projectId,
       rec.rowIndex,
@@ -123,8 +127,22 @@ export async function markProcessed(rec: ProcessedRecord): Promise<void> {
       rec.route,
       rec.primaryKeyword,
       rec.status,
+      rec.scheduledFor ?? null,
     ]
   );
+}
+
+// The latest future publish slot we've stamped on a blog (post-route) draft.
+// Lets the next blog space off our own queued drafts, which aren't visible in
+// the WP publish/future query because they're still drafts.
+export async function latestScheduledBlogDate(projectId: string): Promise<Date | null> {
+  const { rows } = await pool.query<{ latest: Date | null }>(
+    `SELECT MAX(scheduled_for) AS latest
+     FROM processed_rows
+     WHERE project_id = $1 AND route = 'post' AND scheduled_for IS NOT NULL`,
+    [projectId]
+  );
+  return rows[0]?.latest ?? null;
 }
 
 export async function recentProcessed(

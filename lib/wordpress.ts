@@ -26,19 +26,26 @@ export async function createDraft(
   project: ProjectConfig,
   route: PageTypeRoute,
   title: string,
-  htmlContent: string
+  htmlContent: string,
+  // Optional UTC publish date ("YYYY-MM-DDTHH:MM:SS"). When set, the post's
+  // date is stamped to this slot. Status is left as the project's publishStatus
+  // — so a 'draft' stays a dated draft, while a 'publish' project lets WP
+  // schedule it as 'future' automatically.
+  dateGmt?: string
 ): Promise<{ id: number; link: string; editLink: string }> {
+  const body: Record<string, unknown> = {
+    title,
+    content: htmlContent,
+    status: project.publishStatus, // usually 'draft'
+  };
+  if (dateGmt) body.date_gmt = dateGmt;
   const res = await fetch(endpoint(project, route), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: authHeader(project),
     },
-    body: JSON.stringify({
-      title,
-      content: htmlContent,
-      status: project.publishStatus, // usually 'draft'
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -265,6 +272,55 @@ export async function postExists(
   } catch {
     // Network error — be safe, assume it exists
     return true;
+  }
+}
+
+// Upload an image (raw bytes) to the WordPress media library. Returns the new
+// media id and its public source URL so callers can rewrite <img src> to point
+// at the WP-hosted copy instead of the (often expiring) original.
+export async function uploadMedia(
+  project: ProjectConfig,
+  bytes: Uint8Array,
+  filename: string,
+  contentType: string
+): Promise<{ id: number; sourceUrl: string }> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const res = await fetch(`${base}/wp-json/wp/v2/media`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader(project),
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+    body: new Blob([bytes as unknown as BlobPart], { type: contentType }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`WP media upload failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as { id: number; source_url: string };
+  return { id: data.id, sourceUrl: data.source_url };
+}
+
+// Return the date (UTC) of the most recent blog post on the WP site, counting
+// both already-published and scheduled-future posts. Used to space out new
+// blog posts. Returns null if there are none or the query fails.
+export async function getLatestPostDate(project: ProjectConfig): Promise<Date | null> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  try {
+    const res = await fetch(
+      `${base}/wp-json/wp/v2/posts?status=publish,future&orderby=date&order=desc&per_page=1&_fields=date_gmt&context=edit`,
+      { headers: { Authorization: authHeader(project) }, cache: 'no-store' }
+    );
+    if (!res.ok) return null;
+    const list = (await res.json()) as Array<{ date_gmt?: string }>;
+    const raw = list[0]?.date_gmt;
+    if (!raw) return null;
+    // WP returns naive UTC ("2026-06-20T09:00:00"); append Z so it parses as UTC.
+    const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? raw : `${raw}Z`);
+    return isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
   }
 }
 
