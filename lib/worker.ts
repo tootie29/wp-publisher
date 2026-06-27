@@ -13,28 +13,9 @@ import type { ProjectConfig, QueueRow } from './types';
 export async function processRow(project: ProjectConfig, row: QueueRow, runnerEmail: string) {
   const { rowIndex } = row;
 
-  if (await hasProcessed(project.id, rowIndex)) {
-    // Verify the WP post still exists. If it was deleted in WordPress (and
-    // the row is back to "In-Progress" in the sheet), the user clearly wants
-    // it republished — drop the stale history record so we reprocess.
-    const prev = await getProcessedRecord(project.id, rowIndex);
-    if (prev) {
-      const stillExists = await postExists(project, prev.route, prev.wpId);
-      if (stillExists) {
-        log(project.id, 'info', `Row ${rowIndex} already processed, skipping.`, {}, rowIndex);
-        return { skipped: true };
-      }
-      await removeProcessed(project.id, rowIndex);
-      log(
-        project.id,
-        'warn',
-        `Row ${rowIndex} was previously published as ${prev.route} ${prev.wpId} but that ${prev.route} no longer exists in WordPress. Republishing.`,
-        { wpId: prev.wpId, route: prev.route },
-        rowIndex
-      );
-    }
-  }
-
+  // Cheapest checks first — skip rows with no/invalid content link immediately,
+  // before any DB or WordPress calls, so the worker never lingers on them and
+  // moves straight to the next row.
   if (!row.contentLink) {
     log(project.id, 'warn', `Row ${rowIndex} missing content link, skipping.`, {}, rowIndex);
     return { skipped: true, reason: 'no-content-link' };
@@ -57,6 +38,28 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
       { link: row.contentLink }, rowIndex
     );
     return { skipped: true, reason: 'invalid-url' };
+  }
+
+  if (await hasProcessed(project.id, rowIndex)) {
+    // Verify the WP post still exists. If it was deleted in WordPress (and
+    // the row is back to "In-Progress" in the sheet), the user clearly wants
+    // it republished — drop the stale history record so we reprocess.
+    const prev = await getProcessedRecord(project.id, rowIndex);
+    if (prev) {
+      const stillExists = await postExists(project, prev.route, prev.wpId);
+      if (stillExists) {
+        log(project.id, 'info', `Row ${rowIndex} already processed, skipping.`, {}, rowIndex);
+        return { skipped: true };
+      }
+      await removeProcessed(project.id, rowIndex);
+      log(
+        project.id,
+        'warn',
+        `Row ${rowIndex} was previously published as ${prev.route} ${prev.wpId} but that ${prev.route} no longer exists in WordPress. Republishing.`,
+        { wpId: prev.wpId, route: prev.route },
+        rowIndex
+      );
+    }
   }
 
   updateLiveState({
