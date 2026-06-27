@@ -757,41 +757,111 @@ function DraftsTable({
   onChange: () => Promise<void> | void;
 }) {
   const [q, setQ] = useState('');
-  const [publishing, setPublishing] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [activeRow, setActiveRow] = useState<number | null>(null);
   const [pubError, setPubError] = useState<{ row: number; msg: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  function toggleRow(rowIndex: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowIndex)) next.delete(rowIndex);
+      else next.add(rowIndex);
+      return next;
+    });
+  }
+
+  // Select/deselect all currently-filtered draft rows.
+  function toggleAll() {
+    const rows = filtered || [];
+    setSelected((prev) => {
+      const allOn = rows.length > 0 && rows.every((p) => prev.has(p.rowIndex));
+      const next = new Set(prev);
+      if (allOn) rows.forEach((p) => next.delete(p.rowIndex));
+      else rows.forEach((p) => next.add(p.rowIndex));
+      return next;
+    });
+  }
+
+  async function publishOne(rowIndex: number): Promise<{
+    ok: boolean;
+    error?: string;
+    wroteToSheet?: boolean;
+    column?: string;
+  }> {
+    const res = await fetch(`/api/projects/${projectId}/publish-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rowIndex }),
+    });
+    return res.json();
+  }
+
   async function handlePublish(p: PublishedItem) {
     if (
-      !confirm(
-        `Publish "${p.title}" live on WordPress now and write its URL back to the sheet?`
-      )
+      !confirm(`Publish "${p.title}" live on WordPress now and write its URL back to the sheet?`)
     )
       return;
-    setPublishing(p.rowIndex);
+    setBusy(true);
+    setActiveRow(p.rowIndex);
     setPubError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/publish-draft`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rowIndex: p.rowIndex }),
-      });
-      const data = await res.json();
+      const data = await publishOne(p.rowIndex);
       if (!data.ok) throw new Error(data.error || 'Publish failed');
-      if (data.wroteToSheet) {
-        setNotice(`Published "${p.title}" — live URL written to column ${data.column}.`);
-      } else {
-        setNotice(
-          `Published "${p.title}". No Published-URL or Target-URL column is mapped, so the link wasn't written to the sheet — set one in Edit project to enable that.`
-        );
-      }
+      setNotice(
+        data.wroteToSheet
+          ? `Published "${p.title}" — live URL written to column ${data.column}.`
+          : `Published "${p.title}". No Published-URL or Target-URL column is mapped, so the link wasn't written to the sheet — set one in Edit project to enable that.`
+      );
       await onChange();
     } catch (e) {
       setPubError({ row: p.rowIndex, msg: (e as Error).message });
     } finally {
-      setPublishing(null);
+      setBusy(false);
+      setActiveRow(null);
     }
+  }
+
+  async function handleBulkPublish() {
+    const rows = Array.from(selected);
+    if (rows.length === 0) return;
+    if (
+      !confirm(
+        `Publish ${rows.length} draft${rows.length === 1 ? '' : 's'} live on WordPress now and write the URLs back to the sheet?`
+      )
+    )
+      return;
+    setBusy(true);
+    setPubError(null);
+    setNotice(null);
+    let ok = 0;
+    let failed = 0;
+    let noCol = 0;
+    // Sequential — keeps it gentle on the WP site and gives clear per-row progress.
+    for (const rowIndex of rows) {
+      setActiveRow(rowIndex);
+      try {
+        const data = await publishOne(rowIndex);
+        if (data.ok) {
+          ok += 1;
+          if (!data.wroteToSheet) noCol += 1;
+        } else {
+          failed += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+    }
+    setActiveRow(null);
+    setSelected(new Set());
+    let msg = `Published ${ok} of ${rows.length}.`;
+    if (failed) msg += ` ${failed} failed.`;
+    if (noCol && ok) msg += ` No URL column mapped — links weren't written to the sheet.`;
+    setNotice(msg);
+    await onChange();
+    setBusy(false);
   }
 
   // Strict: only show items whose current WordPress status is "draft".
@@ -868,6 +938,25 @@ function DraftsTable({
         placeholder="Search drafts by title, keyword, page type, or row #…"
         resultLabel={filtered && q && drafts ? `${filtered.length} of ${drafts.length}` : undefined}
       />
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={handleBulkPublish}
+            disabled={busy}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 inline-flex items-center gap-1.5 disabled:opacity-40"
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
+            Publish {selected.size} selected
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            disabled={busy}
+            className="text-xs text-white/50 hover:text-white/80 disabled:opacity-40"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
       {(movedOutCount > 0 || goneCount > 0) && (
         <div className="text-xs text-white/45 mb-3 flex flex-col gap-1">
           {movedOutCount > 0 && (
@@ -896,6 +985,22 @@ function DraftsTable({
       <table className="w-full text-sm">
         <thead className="text-left text-white/40 border-b border-white/10">
           <tr>
+            <th className="py-2 pr-3 w-8">
+              <input
+                type="checkbox"
+                aria-label="Select all drafts"
+                className="w-4 h-4 align-middle"
+                checked={(filtered || []).length > 0 && (filtered || []).every((p) => selected.has(p.rowIndex))}
+                ref={(el) => {
+                  if (el) {
+                    const rows = filtered || [];
+                    const all = rows.length > 0 && rows.every((p) => selected.has(p.rowIndex));
+                    el.indeterminate = !all && rows.some((p) => selected.has(p.rowIndex));
+                  }
+                }}
+                onChange={toggleAll}
+              />
+            </th>
             <th className="py-2 pr-3 w-40">When</th>
             <th className="py-2 pr-3 w-14">Row</th>
             <th className="py-2 pr-3 w-20">Route</th>
@@ -905,7 +1010,16 @@ function DraftsTable({
         </thead>
         <tbody>
           {(filtered || []).map((p) => (
-            <tr key={`${p.rowIndex}-${p.wpId}`} className="border-b border-white/5 last:border-0">
+            <tr key={`${p.rowIndex}-${p.wpId}`} className={`border-b border-white/5 last:border-0 ${selected.has(p.rowIndex) ? 'bg-emerald-500/5' : ''}`}>
+              <td className="py-2 pr-3">
+                <input
+                  type="checkbox"
+                  aria-label={`Select row ${p.rowIndex}`}
+                  className="w-4 h-4 align-middle"
+                  checked={selected.has(p.rowIndex)}
+                  onChange={() => toggleRow(p.rowIndex)}
+                />
+              </td>
               <td className="py-2 pr-3 text-white/50 text-xs whitespace-nowrap">
                 {formatRelative(p.processedAt)}
               </td>
@@ -928,11 +1042,11 @@ function DraftsTable({
                 <div className="flex flex-wrap items-center gap-3 text-xs">
                   <button
                     onClick={() => handlePublish(p)}
-                    disabled={publishing !== null}
+                    disabled={busy}
                     className="text-emerald-300 hover:text-emerald-200 inline-flex items-center gap-1 disabled:opacity-40"
                     title="Publish live in WordPress and write the URL back to the sheet"
                   >
-                    {publishing === p.rowIndex ? (
+                    {activeRow === p.rowIndex ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
                     ) : (
                       <Rocket className="w-3 h-3" />
