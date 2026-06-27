@@ -92,6 +92,7 @@ export default function ProjectForm({ initial, mode }: Props) {
   const cols = cfg.sheet.columns;
   const colContentType = cols.contentType ?? '';
   const colTargetUrl = cols.targetUrl ?? '';
+  const colPublishedUrl = cols.publishedUrl ?? '';
 
   async function handleTest() {
     setTesting(true);
@@ -295,7 +296,7 @@ export default function ProjectForm({ initial, mode }: Props) {
               className={inputClass + ' uppercase'} maxLength={2} />
           </Field>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Field
             label="Content Type column"
             hint={`Cell value should be "New Content" or "Content Refresh". Leave blank if you don't use this — every row is treated as new.`}
@@ -313,6 +314,15 @@ export default function ProjectForm({ initial, mode }: Props) {
               onChange={(e) => updateColumn('targetUrl', e.target.value)}
               className={inputClass + ' uppercase'} maxLength={2}
               placeholder="e.g. N" />
+          </Field>
+          <Field
+            label="Published URL column (optional)"
+            hint={`Optional. When you click "Publish" on a draft, the live URL is written here. If left blank, the Target URL column is used instead.`}
+          >
+            <input type="text" value={colPublishedUrl}
+              onChange={(e) => updateColumn('publishedUrl', e.target.value)}
+              className={inputClass + ' uppercase'} maxLength={2}
+              placeholder="e.g. O" />
           </Field>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

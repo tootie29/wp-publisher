@@ -144,18 +144,28 @@ export async function fetchQueue(project: ProjectConfig): Promise<QueueRow[]> {
   return queue;
 }
 
-export async function setRowStatus(
+// Write a value into an arbitrary column (by A1 letter) at a given row.
+export async function setCellValue(
   project: ProjectConfig,
+  columnLetter: string,
   rowIndex: number,
   value: string
 ): Promise<void> {
   const api = await sheets();
   await api.spreadsheets.values.update({
     spreadsheetId: project.sheet.sheetId,
-    range: range(project.sheet.tabName, project.sheet.columns.status, rowIndex),
+    range: range(project.sheet.tabName, columnLetter, rowIndex),
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[value]] },
   });
+}
+
+export async function setRowStatus(
+  project: ProjectConfig,
+  rowIndex: number,
+  value: string
+): Promise<void> {
+  await setCellValue(project, project.sheet.columns.status, rowIndex, value);
 }
 
 export async function probe(project: ProjectConfig): Promise<{

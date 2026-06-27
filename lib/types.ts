@@ -22,6 +22,7 @@ export interface ProjectConfig {
       // refreshes of existing posts. If absent, every row is treated as new.
       contentType?: string;      // e.g. 'M' — values: "New Content" | "Content Refresh"
       targetUrl?: string;        // e.g. 'N' — required for refresh rows: the existing WP post/page URL to overwrite
+      publishedUrl?: string;     // e.g. 'O' — where the live URL is written when a draft is published from the dashboard
     };
     headerRow: number;           // usually 1, data starts on headerRow + 1
     triggerValue: string;        // 'In-progress' (case-insensitive match)

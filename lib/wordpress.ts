@@ -269,6 +269,29 @@ export async function postExists(
   }
 }
 
+// Flip an existing post/page to "publish" and return its live URL. Used by the
+// dashboard's "Publish" button on the Drafts tab.
+export async function publishPost(
+  project: ProjectConfig,
+  route: PageTypeRoute,
+  postId: number
+): Promise<{ id: number; link: string; editLink: string }> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const path = route === 'post' ? 'posts' : 'pages';
+  const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: authHeader(project) },
+    body: JSON.stringify({ status: 'publish' }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`WP publish ${route} ${postId} failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as { id: number; link: string };
+  const editLink = `${base}/wp-admin/post.php?post=${data.id}&action=edit`;
+  return { id: data.id, link: data.link, editLink };
+}
+
 // Upload an image (raw bytes) to the WordPress media library. Returns the new
 // media id and its public source URL so callers can rewrite <img src> to point
 // at the WP-hosted copy instead of the (often expiring) original.

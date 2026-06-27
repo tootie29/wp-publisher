@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, RefreshCw, CheckCircle2, AlertCircle, Loader2, ExternalLink,
   Pencil, FileText, Clock, RotateCcw, AlertTriangle, LogIn, LogOut,
-  Inbox, Radio, Sparkles, Pause, PlayCircle, Square, Search, X, Trash2,
+  Inbox, Radio, Sparkles, Pause, PlayCircle, Square, Search, X, Trash2, Rocket,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -598,7 +598,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
       {/* Tab content */}
       <div className="px-6 py-4">
         {tab === 'queue' && <QueueTable queue={queue} project={project} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
-        {tab === 'drafts' && <DraftsTable published={published} />}
+        {tab === 'drafts' && <DraftsTable published={published} projectId={project.id} onChange={refresh} />}
         {tab === 'published' && (
           <WpPublishedTable
             projectId={project.id}
@@ -747,8 +747,52 @@ function QueueTable({
   );
 }
 
-function DraftsTable({ published }: { published: PublishedItem[] | null }) {
+function DraftsTable({
+  published,
+  projectId,
+  onChange,
+}: {
+  published: PublishedItem[] | null;
+  projectId: string;
+  onChange: () => Promise<void> | void;
+}) {
   const [q, setQ] = useState('');
+  const [publishing, setPublishing] = useState<number | null>(null);
+  const [pubError, setPubError] = useState<{ row: number; msg: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function handlePublish(p: PublishedItem) {
+    if (
+      !confirm(
+        `Publish "${p.title}" live on WordPress now and write its URL back to the sheet?`
+      )
+    )
+      return;
+    setPublishing(p.rowIndex);
+    setPubError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/publish-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rowIndex: p.rowIndex }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Publish failed');
+      if (data.wroteToSheet) {
+        setNotice(`Published "${p.title}" — live URL written to column ${data.column}.`);
+      } else {
+        setNotice(
+          `Published "${p.title}". No Published-URL or Target-URL column is mapped, so the link wasn't written to the sheet — set one in Edit project to enable that.`
+        );
+      }
+      await onChange();
+    } catch (e) {
+      setPubError({ row: p.rowIndex, msg: (e as Error).message });
+    } finally {
+      setPublishing(null);
+    }
+  }
 
   // Strict: only show items whose current WordPress status is "draft".
   // Anything else (publish, pending, private, future, trash, deleted/unknown)
@@ -840,6 +884,11 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
           )}
         </div>
       )}
+      {notice && (
+        <div className="text-xs text-emerald-300/90 bg-emerald-500/10 border border-emerald-500/20 rounded px-3 py-2 mb-3 flex items-start gap-2">
+          <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {notice}
+        </div>
+      )}
       {filtered && filtered.length === 0 ? (
         <div className="text-white/40 text-xs py-6 text-center">No drafts match "{q}".</div>
       ) : (
@@ -876,7 +925,20 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
                 )}
               </td>
               <td className="py-2 pr-3">
-                <div className="flex gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <button
+                    onClick={() => handlePublish(p)}
+                    disabled={publishing !== null}
+                    className="text-emerald-300 hover:text-emerald-200 inline-flex items-center gap-1 disabled:opacity-40"
+                    title="Publish live in WordPress and write the URL back to the sheet"
+                  >
+                    {publishing === p.rowIndex ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Rocket className="w-3 h-3" />
+                    )}
+                    Publish
+                  </button>
                   <a
                     href={p.editLink}
                     target="_blank"
@@ -905,6 +967,9 @@ function DraftsTable({ published }: { published: PublishedItem[] | null }) {
                     <ExternalLink className="w-3 h-3" /> Source
                   </a>
                 </div>
+                {pubError && pubError.row === p.rowIndex && (
+                  <div className="text-[11px] text-red-400 mt-1">{pubError.msg}</div>
+                )}
               </td>
             </tr>
           ))}
