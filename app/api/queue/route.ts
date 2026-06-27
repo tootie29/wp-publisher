@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { fetchQueue } from '@/lib/sheets';
-import { hasProcessed } from '@/lib/state';
+import { getProcessed } from '@/lib/state';
 import { ownsProject } from '@/lib/users';
 
 export const dynamic = 'force-dynamic';
@@ -25,11 +25,29 @@ export async function GET(req: Request) {
 
   try {
     const queueRows = await fetchQueue(project);
-    const checks = await Promise.all(
-      queueRows.map((r) => hasProcessed(project.id, r.rowIndex))
-    );
-    const queue = queueRows.filter((_, i) => !checks[i]);
-    return NextResponse.json({ queue });
+    const processed = await getProcessed(project.id);
+    const procByRow = new Map(processed.map((r) => [r.rowIndex, r]));
+
+    // queue = In-progress rows not yet published (the worker will process these).
+    const queue = queueRows.filter((r) => !procByRow.has(r.rowIndex));
+
+    // alreadyPublished = rows set to In-progress that are already in the ledger.
+    // These are skipped by the worker; surface them so they can be re-queued.
+    const alreadyPublished = queueRows
+      .filter((r) => procByRow.has(r.rowIndex))
+      .map((r) => {
+        const rec = procByRow.get(r.rowIndex)!;
+        return {
+          rowIndex: r.rowIndex,
+          primaryKeyword: r.primaryKeyword,
+          pageType: r.pageType,
+          contentLink: r.contentLink,
+          wpLink: rec.wpLink,
+          route: rec.route,
+        };
+      });
+
+    return NextResponse.json({ queue, alreadyPublished });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

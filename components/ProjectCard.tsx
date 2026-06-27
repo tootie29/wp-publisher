@@ -49,6 +49,11 @@ interface QueueItem {
   pageType: string; primaryKeyword: string; contentLink: string;
 }
 
+interface RequeueRow {
+  rowIndex: number; primaryKeyword: string; pageType: string;
+  contentLink: string; wpLink?: string; route?: 'post' | 'page';
+}
+
 interface PublishedItem {
   projectId: string; rowIndex: number; wpId: number;
   wpLink: string; editLink: string; sourceLink: string;
@@ -102,6 +107,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
   const [deleting, setDeleting] = useState(false);
   const [queue, setQueue] = useState<QueueItem[] | null>(null);
   const [published, setPublished] = useState<PublishedItem[] | null>(null);
+  const [alreadyPublished, setAlreadyPublished] = useState<RequeueRow[]>([]);
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [live, setLive] = useState<LiveState | null>(null);
@@ -134,6 +140,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
         fetch(`/api/projects/${project.id}/published?limit=100`).then((r) => r.json()),
       ]);
       setQueue(q.queue || []);
+      setAlreadyPublished(q.alreadyPublished || []);
       setHealth(h);
       setPublished(p.published || []);
       setSummary(p.summary || null);
@@ -597,7 +604,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
 
       {/* Tab content */}
       <div className="px-6 py-4">
-        {tab === 'queue' && <QueueTable queue={queue} project={project} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
+        {tab === 'queue' && <QueueTable queue={queue} alreadyPublished={alreadyPublished} projectId={project.id} onChange={refresh} project={project} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
         {tab === 'drafts' && <DraftsTable published={published} projectId={project.id} onChange={refresh} />}
         {tab === 'published' && (
           <WpPublishedTable
@@ -637,14 +644,31 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 function QueueTable({
-  queue, project, liveRow, livePhase,
+  queue, alreadyPublished, projectId, onChange, project, liveRow, livePhase,
 }: {
   queue: QueueItem[] | null;
+  alreadyPublished: RequeueRow[];
+  projectId: string;
+  onChange: () => Promise<void> | void;
   project: PublicProject;
   liveRow: number | null;
   livePhase: string | null;
 }) {
   const [q, setQ] = useState('');
+  const [requeuing, setRequeuing] = useState<number | null>(null);
+
+  async function handleRequeue(rowIndex: number) {
+    setRequeuing(rowIndex);
+    try {
+      await fetch(`/api/projects/${projectId}/published/${rowIndex}`, { method: 'DELETE' });
+      await onChange();
+    } catch {
+      // surfaced on next refresh
+    } finally {
+      setRequeuing(null);
+    }
+  }
+
   const filtered = useMemo(() => {
     if (!queue) return null;
     const needle = q.trim().toLowerCase();
@@ -664,7 +688,7 @@ function QueueTable({
       </div>
     );
   }
-  if (queue.length === 0) {
+  if (queue.length === 0 && alreadyPublished.length === 0) {
     return (
       <div className="py-10 text-center">
         <Inbox className="w-8 h-8 text-white/20 mx-auto mb-3" />
@@ -685,7 +709,9 @@ function QueueTable({
         resultLabel={filtered && q ? `${filtered.length} of ${queue.length}` : undefined}
       />
       {filtered && filtered.length === 0 ? (
-        <div className="text-white/40 text-xs py-6 text-center">No queue items match "{q}".</div>
+        <div className="text-white/40 text-xs py-6 text-center">
+          {q ? `No queue items match "${q}".` : 'No rows waiting to publish.'}
+        </div>
       ) : (
       <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -742,6 +768,58 @@ function QueueTable({
         </tbody>
       </table>
     </div>
+      )}
+
+      {alreadyPublished.length > 0 && (
+        <div className="mt-5 border-t border-white/10 pt-4">
+          <div className="text-xs text-white/60 mb-2">
+            {alreadyPublished.length} row{alreadyPublished.length === 1 ? '' : 's'} set to{' '}
+            <code className="text-white/60">"{project.sheet.triggerValue}"</code>{' '}
+            {alreadyPublished.length === 1 ? 'is' : 'are'} already published, so the worker skips{' '}
+            {alreadyPublished.length === 1 ? 'it' : 'them'}.{' '}
+            <span className="text-amber-300/80">Re-queue</span> to reprocess (e.g. after fixing a wrong match).
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-white/40 border-b border-white/10">
+                <tr>
+                  <th className="py-2 pr-3 w-14">Row</th>
+                  <th className="py-2 pr-3">Primary Keyword</th>
+                  <th className="py-2 pr-3 w-40">Published to</th>
+                  <th className="py-2 pr-3 w-28">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alreadyPublished.map((r) => (
+                  <tr key={r.rowIndex} className="border-b border-white/5 last:border-0">
+                    <td className="py-2 pr-3 text-white/50">{r.rowIndex}</td>
+                    <td className="py-2 pr-3 text-white/80">{r.primaryKeyword || '—'}</td>
+                    <td className="py-2 pr-3">
+                      {r.wpLink ? (
+                        <a href={r.wpLink} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1 text-xs">
+                          {r.route || 'post'} <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="text-white/40 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <button
+                        onClick={() => handleRequeue(r.rowIndex)}
+                        disabled={requeuing !== null}
+                        className="text-amber-300 hover:text-amber-200 inline-flex items-center gap-1 text-xs disabled:opacity-40"
+                        title="Remove from publish history so it's reprocessed on the next run"
+                      >
+                        {requeuing === r.rowIndex ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                        Re-queue
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );
