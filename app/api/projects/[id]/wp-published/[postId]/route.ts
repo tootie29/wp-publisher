@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { ownsProject } from '@/lib/users';
-import { listTerms, resolveTerms, setPostTerms, updateYoastMeta } from '@/lib/wordpress';
+import { listTerms, resolveTerms, setPostTerms, supportsTerms, updateYoastMeta } from '@/lib/wordpress';
 import { log } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
@@ -73,9 +73,13 @@ export async function PATCH(
   if (Object.keys(fields).length === 0 && !wantsTerms) {
     return NextResponse.json({ error: 'No editable fields provided' }, { status: 400 });
   }
-  if (wantsTerms && body.type !== 'post') {
+  if (wantsTerms && !(await supportsTerms(project, body.type))) {
     return NextResponse.json(
-      { error: 'WordPress pages have no categories or tags' },
+      {
+        error:
+          `This site's ${body.type}s have no categories or tags registered. ` +
+          `Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`,
+      },
       { status: 400 }
     );
   }
@@ -109,7 +113,7 @@ export async function PATCH(
         );
       }
 
-      await setPostTerms(project, 'post', postId, resolved);
+      await setPostTerms(project, body.type, postId, resolved);
 
       // Echo back names (not ids) so the UI can render chips directly. Read
       // them from the site so the response reflects WP's canonical spelling of

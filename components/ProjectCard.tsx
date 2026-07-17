@@ -89,6 +89,15 @@ interface LiveState {
 
 type Tab = 'queue' | 'drafts' | 'published';
 
+// The WP site's categories/tags, plus which routes actually have taxonomies
+// registered. Core gives them to posts only; the wp-publisher mu-plugin adds
+// them to pages too — so this is read from the site, never assumed.
+interface SiteTerms {
+  categories: string[];
+  tags: string[];
+  supports: { post: boolean; page: boolean };
+}
+
 interface WpPublishedRow {
   id: number;
   type: 'post' | 'page';
@@ -129,6 +138,39 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
   const [wpPublished, setWpPublished] = useState<WpPublishedRow[] | null>(null);
   const [wpPublishedError, setWpPublishedError] = useState<string | null>(null);
   const [wpPublishedLoading, setWpPublishedLoading] = useState(false);
+  // Shared by the Queue chips and the Published tab's editor. Assume both routes
+  // take terms until the probe says otherwise, so a slow load doesn't flash the
+  // editor as disabled.
+  const [terms, setTerms] = useState<SiteTerms>({
+    categories: [],
+    tags: [],
+    supports: { post: true, page: true },
+  });
+
+  const loadTerms = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/terms`);
+      const data = (await res.json()) as {
+        categories?: string[];
+        tags?: string[];
+        supports?: { post?: boolean; page?: boolean };
+        error?: string;
+      };
+      if (!data.error) {
+        setTerms({
+          categories: data.categories || [],
+          tags: data.tags || [],
+          supports: { post: data.supports?.post ?? true, page: data.supports?.page ?? true },
+        });
+      }
+    } catch {
+      // Autocomplete is a convenience — typing a term still works without it.
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    void loadTerms();
+  }, [loadTerms]);
 
   const amCurrentProject = live?.running && live.projectId === project.id;
   const hasSurferLinks = useMemo(
@@ -610,7 +652,7 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
 
       {/* Tab content */}
       <div className="px-6 py-4">
-        {tab === 'queue' && <QueueTable queue={queue} alreadyPublished={alreadyPublished} projectId={project.id} onChange={refresh} project={project} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
+        {tab === 'queue' && <QueueTable queue={queue} alreadyPublished={alreadyPublished} projectId={project.id} onChange={refresh} project={project} termSupport={terms.supports} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
         {tab === 'drafts' && <DraftsTable published={published} projectId={project.id} onChange={refresh} />}
         {tab === 'published' && (
           <WpPublishedTable
@@ -618,6 +660,8 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
             items={wpPublished}
             loading={wpPublishedLoading}
             error={wpPublishedError}
+            terms={terms}
+            onTermsChanged={loadTerms}
             onItemUpdated={(updated) => {
               setWpPublished((curr) =>
                 (curr || []).map((row) =>
@@ -649,24 +693,28 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-// Categories/tags for one queue row. Pages have no taxonomies, so terms on a
-// page-routed row are shown struck through — they'll be ignored at publish time
-// and this is the cheapest place to notice the mismatch.
+// Categories/tags for one queue row. When the site doesn't register taxonomies
+// for this row's route, the terms are shown struck through — they'll be ignored
+// at publish time and this is the cheapest place to notice the mismatch.
 function TermChips({
-  categories, tags, route,
+  categories, tags, route, ignored,
 }: {
   categories?: string[];
   tags?: string[];
   route: 'post' | 'page';
+  ignored: boolean;
 }) {
   const cats = categories || [];
   const tgs = tags || [];
   if (!cats.length && !tgs.length) return <span className="text-white/25 text-xs">—</span>;
-  const ignored = route === 'page';
   return (
     <div
       className={`flex flex-wrap gap-1 ${ignored ? 'opacity-50' : ''}`}
-      title={ignored ? 'Pages have no categories or tags — these are ignored.' : undefined}
+      title={
+        ignored
+          ? `This site's ${route}s have no categories or tags registered, so these are ignored. Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`
+          : undefined
+      }
     >
       {cats.map((c) => (
         <span
@@ -689,13 +737,14 @@ function TermChips({
 }
 
 function QueueTable({
-  queue, alreadyPublished, projectId, onChange, project, liveRow, livePhase,
+  queue, alreadyPublished, projectId, onChange, project, termSupport, liveRow, livePhase,
 }: {
   queue: QueueItem[] | null;
   alreadyPublished: RequeueRow[];
   projectId: string;
   onChange: () => Promise<void> | void;
   project: PublicProject;
+  termSupport: { post: boolean; page: boolean };
   liveRow: number | null;
   livePhase: string | null;
 }) {
@@ -801,6 +850,7 @@ function QueueTable({
                       categories={row.categories}
                       tags={row.tags}
                       route={route}
+                      ignored={!termSupport[route]}
                     />
                   </td>
                 )}
@@ -1516,36 +1566,18 @@ function WpPublishedTable({
   loading,
   error,
   onItemUpdated,
+  terms,
+  onTermsChanged,
 }: {
   projectId: string;
   items: WpPublishedRow[] | null;
   loading: boolean;
   error: string | null;
   onItemUpdated: (row: WpPublishedRow) => void;
+  terms: SiteTerms;
+  onTermsChanged: () => void;
 }) {
   const [q, setQ] = useState('');
-  // Existing site terms, for the add-term autocomplete. Loaded once; refreshed
-  // after a save that created something new so the next dropdown includes it.
-  const [terms, setTerms] = useState<{ categories: string[]; tags: string[] }>({
-    categories: [],
-    tags: [],
-  });
-
-  const loadTerms = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/projects/${projectId}/terms`);
-      const data = (await res.json()) as { categories?: string[]; tags?: string[]; error?: string };
-      if (!data.error) {
-        setTerms({ categories: data.categories || [], tags: data.tags || [] });
-      }
-    } catch {
-      // Autocomplete is a convenience — typing a term still works without it.
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void loadTerms();
-  }, [loadTerms]);
 
   async function saveTerms(
     it: WpPublishedRow,
@@ -1566,7 +1598,7 @@ function WpPublishedTable({
     if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
     // Trust the server's echo — it carries WordPress's canonical spelling.
     onItemUpdated({ ...it, [taxonomy]: data[taxonomy] ?? next });
-    void loadTerms();
+    onTermsChanged();
   }
 
   async function saveField(it: WpPublishedRow, field: EditableField, next: string) {
@@ -1757,8 +1789,8 @@ function WpPublishedTable({
                   suggestions={terms.categories}
                   label="category"
                   tone="category"
-                  disabled={it.type === 'page'}
-                  disabledHint="WordPress pages have no categories."
+                  disabled={!terms.supports[it.type]}
+                  disabledHint={`This site's ${it.type}s have no categories registered. Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`}
                   onSave={(next) => saveTerms(it, 'categories', next)}
                 />
               </td>
@@ -1768,8 +1800,8 @@ function WpPublishedTable({
                   suggestions={terms.tags}
                   label="tag"
                   tone="tag"
-                  disabled={it.type === 'page'}
-                  disabledHint="WordPress pages have no tags."
+                  disabled={!terms.supports[it.type]}
+                  disabledHint={`This site's ${it.type}s have no tags registered. Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`}
                   onSave={(next) => saveTerms(it, 'tags', next)}
                 />
               </td>

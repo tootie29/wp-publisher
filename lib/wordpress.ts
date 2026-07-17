@@ -22,8 +22,8 @@ function endpoint(project: ProjectConfig, route: PageTypeRoute): string {
   return `${base}/wp-json/wp/v2/${path}`;
 }
 
-// Category/tag term ids to assign. Post-route only — WordPress pages have no
-// taxonomies and reject these params.
+// Category/tag term ids to assign. Callers gate on supportsTerms() — a route
+// whose site has no taxonomies registered should be passed nothing here.
 export interface PostTerms {
   categories?: number[];
   tags?: number[];
@@ -47,10 +47,8 @@ export async function createDraft(
     status: project.publishStatus, // usually 'draft'
   };
   if (dateGmt) body.date_gmt = dateGmt;
-  if (route === 'post') {
-    if (terms?.categories?.length) body.categories = terms.categories;
-    if (terms?.tags?.length) body.tags = terms.tags;
-  }
+  if (terms?.categories?.length) body.categories = terms.categories;
+  if (terms?.tags?.length) body.tags = terms.tags;
   const res = await fetch(endpoint(project, route), {
     method: 'POST',
     headers: {
@@ -195,10 +193,8 @@ export async function updatePost(
   const path = route === 'post' ? 'posts' : 'pages';
   const body: Record<string, unknown> = { content: htmlContent };
   if (title) body.title = title;
-  if (route === 'post') {
-    if (terms?.categories?.length) body.categories = terms.categories;
-    if (terms?.tags?.length) body.tags = terms.tags;
-  }
+  if (terms?.categories?.length) body.categories = terms.categories;
+  if (terms?.tags?.length) body.tags = terms.tags;
   const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
     method: 'POST',
     headers: {
@@ -337,6 +333,44 @@ export async function resolveTerms(
   return { ids, created, failed };
 }
 
+// Does this site attach categories/tags to the given route? Core gives them to
+// posts only, but our mu-plugin registers them for pages too — so this is a
+// per-site fact, not something to hardcode. WordPress reports it on the types
+// endpoint; a site without the plugin returns just ["post_tag"]-less pages and
+// the caller skips terms for that route.
+//
+// Cached for the life of the process: it changes only when someone edits the
+// plugin, and the worker would otherwise re-probe on every row.
+const taxonomySupportCache = new Map<string, boolean>();
+
+export async function supportsTerms(
+  project: ProjectConfig,
+  route: PageTypeRoute
+): Promise<boolean> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const key = `${base}|${route}`;
+  const cached = taxonomySupportCache.get(key);
+  if (cached !== undefined) return cached;
+
+  let supported = route === 'post'; // core guarantee; the fallback if we can't ask
+  try {
+    const res = await fetch(`${base}/wp-json/wp/v2/types/${route}?_fields=taxonomies`, {
+      headers: { Authorization: authHeader(project) },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { taxonomies?: string[] };
+      const taxonomies = data.taxonomies || [];
+      supported = taxonomies.includes('category') || taxonomies.includes('post_tag');
+    }
+  } catch {
+    // Network trouble — fall back to the core assumption rather than dropping
+    // terms the site would have accepted.
+  }
+  taxonomySupportCache.set(key, supported);
+  return supported;
+}
+
 // Every category/tag on the site, for the dashboard's term autocomplete and for
 // turning a post's term ids back into names. Pages through WP's 100-per-page
 // cap; stops at 1000 terms (well past any sane site's category list).
@@ -359,32 +393,30 @@ export async function listTerms(
   return out;
 }
 
-// Replace a post's categories/tags without touching its content. Unlike the
-// create/update paths, an empty array IS sent here — clearing every term is a
-// legitimate edit when the user removes the last chip.
+// Replace a post's or page's categories/tags without touching its content.
+// Unlike the create/update paths, an empty array IS sent here — clearing every
+// term is a legitimate edit when the user removes the last chip.
 export async function setPostTerms(
   project: ProjectConfig,
   route: PageTypeRoute,
   postId: number,
   terms: PostTerms
 ): Promise<{ categories: number[]; tags: number[] }> {
-  if (route !== 'post') {
-    throw new Error('WordPress pages have no categories or tags');
-  }
   const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const path = route === 'post' ? 'posts' : 'pages';
   const body: Record<string, unknown> = {};
   if (terms.categories) body.categories = terms.categories;
   if (terms.tags) body.tags = terms.tags;
   if (Object.keys(body).length === 0) throw new Error('No taxonomies to update');
 
-  const res = await fetch(`${base}/wp-json/wp/v2/posts/${postId}`, {
+  const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: authHeader(project) },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`WP term update on post ${postId} failed (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(`WP term update on ${route} ${postId} failed (${res.status}): ${text.slice(0, 300)}`);
   }
   const data = (await res.json()) as { categories?: number[]; tags?: number[] };
   return { categories: data.categories || [], tags: data.tags || [] };

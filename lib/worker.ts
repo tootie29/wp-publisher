@@ -2,7 +2,7 @@
 import { listProjects } from './projects';
 import { fetchQueue, setRowStatus } from './sheets';
 import { extractContent } from './extract';
-import { createDraft, findPostByTitle, findPostByUrl, getLatestPostDate, postExists, resolveRoute, resolveTerms, updatePost, updateYoastMeta, type PostTerms } from './wordpress';
+import { createDraft, findPostByTitle, findPostByUrl, getLatestPostDate, postExists, resolveRoute, resolveTerms, supportsTerms, updatePost, updateYoastMeta, type PostTerms } from './wordpress';
 import { htmlToBlocks } from './blocks';
 import { uploadAndRewriteImages } from './media';
 import { log } from './logger';
@@ -183,14 +183,17 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     }
   }
 
-  // Per-row categories/tags from the sheet. WordPress only accepts term ids,
-  // so names are resolved (and created when new) first. Pages have no
-  // taxonomies — skip the lookups entirely unless this row lands on a post.
-  // Best-effort: unresolvable terms warn and are dropped rather than failing a
-  // row whose content is otherwise fine.
+  // Per-row categories/tags from the sheet. WordPress only accepts term ids, so
+  // names are resolved (and created when new) first. Whether this route has
+  // taxonomies at all is a per-site fact — core gives them to posts only, but
+  // our mu-plugin registers them for pages too — so ask the site rather than
+  // assume. Best-effort: unresolvable terms warn and are dropped rather than
+  // failing a row whose content is otherwise fine.
   const effectiveRoute = found ? found.type : route;
   const terms: PostTerms = {};
-  if (effectiveRoute === 'post' && (row.categories.length || row.tags.length)) {
+  const hasSheetTerms = row.categories.length > 0 || row.tags.length > 0;
+  const routeTakesTerms = hasSheetTerms ? await supportsTerms(project, effectiveRoute) : false;
+  if (routeTakesTerms) {
     for (const taxonomy of ['categories', 'tags'] as const) {
       const names = row[taxonomy];
       if (!names.length) continue;
@@ -204,15 +207,17 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
       }
     }
     log(project.id, 'info', 'Assigning taxonomy terms', {
+      route: effectiveRoute,
       categories: row.categories,
       tags: row.tags,
       categoryIds: terms.categories ?? [],
       tagIds: terms.tags ?? [],
     }, rowIndex);
-  } else if (effectiveRoute === 'page' && (row.categories.length || row.tags.length)) {
+  } else if (hasSheetTerms) {
     log(project.id, 'warn',
-      `Row ${rowIndex} has categories/tags but routes to a page — WordPress pages have no categories or tags, so they were ignored.`,
-      { categories: row.categories, tags: row.tags }, rowIndex
+      `Row ${rowIndex} has categories/tags but this site's ${effectiveRoute}s have no categories or tags registered, so they were ignored. ` +
+      `Install/update the wp-publisher-yoast-rest mu-plugin to enable them on ${effectiveRoute}s.`,
+      { categories: row.categories, tags: row.tags, route: effectiveRoute }, rowIndex
     );
   }
 

@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: WP Publisher — Yoast REST Meta
- * Description: Exposes the Yoast SEO focus keyphrase, meta title (raw template), and meta description on the WordPress REST API for posts and pages, so the WP Publisher dashboard can read them.
- * Version: 1.0.0
+ * Plugin Name: WP Publisher — REST Support
+ * Description: Exposes the Yoast SEO focus keyphrase, meta title (raw template), and meta description on the WordPress REST API for posts and pages, and attaches categories/tags to pages, so the WP Publisher dashboard can read and edit them.
+ * Version: 1.1.0
  * Author: Internal
  * License: GPL-2.0-or-later
  */
@@ -33,4 +33,39 @@ add_action('init', function () {
             ]);
         }
     }
+
+    // WordPress core attaches categories and tags to posts only. This site's
+    // content model puts real topical content on pages too (location pages,
+    // practice areas, cluster content), so make both taxonomies available there
+    // as well. The REST posts controller builds its taxonomy fields from
+    // get_object_taxonomies() at rest_api_init, which runs after init — so
+    // registering here is what makes /wp/v2/pages accept and return
+    // `categories` and `tags`, and is what the dashboard probes for via
+    // /wp/v2/types/page.
+    register_taxonomy_for_object_type('category', 'page');
+    register_taxonomy_for_object_type('post_tag', 'page');
+});
+
+// Pages don't get a taxonomy metabox from core just because the taxonomy is
+// registered for them — without this, terms set by the dashboard would be
+// invisible (and unremovable) to anyone editing the page in wp-admin.
+add_action('add_meta_boxes_page', function () {
+    add_meta_box(
+        'wp_publisher_page_categories',
+        __('Categories'),
+        'post_categories_meta_box',
+        'page',
+        'side',
+        'default',
+        ['taxonomy' => 'category']
+    );
+    add_meta_box(
+        'wp_publisher_page_tags',
+        __('Tags'),
+        'post_tags_meta_box',
+        'page',
+        'side',
+        'default',
+        ['taxonomy' => 'post_tag']
+    );
 });

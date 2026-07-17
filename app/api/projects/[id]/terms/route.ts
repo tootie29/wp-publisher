@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { ownsProject } from '@/lib/users';
-import { listTerms } from '@/lib/wordpress';
+import { listTerms, supportsTerms } from '@/lib/wordpress';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,13 +22,19 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   }
 
   try {
-    const [categories, tags] = await Promise.all([
+    // `supports` tells the UI which routes actually have taxonomies on this
+    // site, so the editor is only disabled when WordPress really would reject
+    // the write — rather than assuming pages never take terms.
+    const [categories, tags, postOk, pageOk] = await Promise.all([
       listTerms(project, 'categories'),
       listTerms(project, 'tags'),
+      supportsTerms(project, 'post'),
+      supportsTerms(project, 'page'),
     ]);
     return NextResponse.json({
       categories: categories.map((t) => t.name),
       tags: tags.map((t) => t.name),
+      supports: { post: postOk, page: pageOk },
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
