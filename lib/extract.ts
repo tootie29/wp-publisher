@@ -134,29 +134,71 @@ export async function extractFromGoogleDoc(url: string): Promise<ExtractedConten
 
 /* -------------------- Static HTML -------------------- */
 
+// Header profiles to try, in order, when fetching a static file.
+//
+// Managed WordPress hosts sit behind bot filters that judge a request on more
+// than the URL, and what they accept differs per host — so rather than guess a
+// single "correct" set, try a few shapes and take the first that works. Both
+// ends of the spectrum are covered: a full browser-ish request, and a plain
+// honest one (a fake Chrome UA from a datacenter IP is itself a bot signature,
+// so the bare profile sometimes succeeds where the browser-ish one is refused).
+const FETCH_PROFILES: { label: string; headers: Record<string, string> }[] = [
+  {
+    label: 'browser-like',
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  },
+  { label: 'bare', headers: { Accept: 'text/html,*/*;q=0.8' } },
+  { label: 'identity-encoding', headers: { Accept: '*/*', 'Accept-Encoding': 'identity' } },
+];
+
 // A self-hosted .html article — typically a Frase/Surfer export written to the
 // client site's own uploads dir. These are plain server-rendered documents on a
 // public URL, so unlike the SaaS sources they need no session, no extension and
 // no headless browser: a fetch and a parse is the whole job.
 export async function extractFromStaticHtml(url: string): Promise<ExtractedContent> {
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      cache: 'no-store',
-      headers: {
-        // Some hosts (Cloudways among them) serve a challenge page to clients
-        // with no UA rather than the file.
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-          '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-      },
-    });
-  } catch (e) {
-    throw new Error(`Could not reach ${url}: ${(e as Error).message}`);
+  let res: Response | null = null;
+  const attempts: string[] = [];
+
+  for (const profile of FETCH_PROFILES) {
+    try {
+      const r = await fetch(url, { cache: 'no-store', headers: profile.headers });
+      if (r.ok) {
+        res = r;
+        break;
+      }
+      // Record who refused us and what they said. Without this the log just
+      // says "returned 415", which names neither the rejecter nor the reason.
+      const body = await r.text().catch(() => '');
+      const server = r.headers.get('server') || 'unknown';
+      const snippet = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+      attempts.push(
+        `${profile.label}: ${r.status} ${r.statusText || ''} (server=${server}${snippet ? `, body="${snippet}"` : ''})`
+      );
+      // The file genuinely isn't there — a different request shape won't
+      // conjure it up. Bot filters answer 403/415/429/503, not 404, so stop
+      // here rather than firing two more pointless requests.
+      if (r.status === 404 || r.status === 410) {
+        throw new Error(
+          `Fetching the content file returned ${r.status} — the file isn't there. ` +
+          `Check the link in the sheet is correct: ${url}`
+        );
+      }
+    } catch (e) {
+      if (e instanceof Error && /isn't there/.test(e.message)) throw e;
+      attempts.push(`${profile.label}: ${(e as Error).message}`);
+    }
   }
-  if (!res.ok) {
+
+  if (!res) {
     throw new Error(
-      `Fetching the content file returned ${res.status}. Check the link in the sheet is public and correct: ${url}`
+      `Could not fetch the content file — every request shape was refused. ${attempts.join(' | ')}. ` +
+      `If the file opens fine in a browser, this is the host's bot filter refusing the server's IP rather than a bad link. URL: ${url}`
     );
   }
 
