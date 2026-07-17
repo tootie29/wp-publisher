@@ -339,9 +339,14 @@ export async function resolveTerms(
 // endpoint; a site without the plugin returns just ["post_tag"]-less pages and
 // the caller skips terms for that route.
 //
-// Cached for the life of the process: it changes only when someone edits the
-// plugin, and the worker would otherwise re-probe on every row.
-const taxonomySupportCache = new Map<string, boolean>();
+// Cached briefly so the worker doesn't re-probe on every row. The TTL is the
+// whole point: this answer changes the moment someone installs or updates the
+// mu-plugin, and a cache with no expiry pinned a stale "pages have no
+// taxonomies" for the life of the serverless instance — so uploading the plugin
+// appeared to do nothing, intermittently, depending on which instance served
+// the request. Keep this short; it costs one cheap request per site per minute.
+const TAXONOMY_SUPPORT_TTL_MS = 60_000;
+const taxonomySupportCache = new Map<string, { value: boolean; expiresAt: number }>();
 
 export async function supportsTerms(
   project: ProjectConfig,
@@ -349,10 +354,11 @@ export async function supportsTerms(
 ): Promise<boolean> {
   const base = project.wordpress.baseUrl.replace(/\/+$/, '');
   const key = `${base}|${route}`;
-  const cached = taxonomySupportCache.get(key);
-  if (cached !== undefined) return cached;
+  const hit = taxonomySupportCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
 
   let supported = route === 'post'; // core guarantee; the fallback if we can't ask
+  let answered = false;
   try {
     const res = await fetch(`${base}/wp-json/wp/v2/types/${route}?_fields=taxonomies`, {
       headers: { Authorization: authHeader(project) },
@@ -362,13 +368,27 @@ export async function supportsTerms(
       const data = (await res.json()) as { taxonomies?: string[] };
       const taxonomies = data.taxonomies || [];
       supported = taxonomies.includes('category') || taxonomies.includes('post_tag');
+      answered = true;
     }
   } catch {
     // Network trouble — fall back to the core assumption rather than dropping
     // terms the site would have accepted.
   }
-  taxonomySupportCache.set(key, supported);
+  // Only cache an answer the site actually gave. A failed probe is an unknown,
+  // and caching the fallback would pin a guess as though it were a fact.
+  if (answered) {
+    taxonomySupportCache.set(key, {
+      value: supported,
+      expiresAt: Date.now() + TAXONOMY_SUPPORT_TTL_MS,
+    });
+  }
   return supported;
+}
+
+// Drop cached taxonomy-support answers. Exposed so a user who just installed the
+// mu-plugin can force a re-probe instead of waiting out the TTL.
+export function clearTaxonomySupportCache(): void {
+  taxonomySupportCache.clear();
 }
 
 // Every category/tag on the site, for the dashboard's term autocomplete and for

@@ -6,11 +6,11 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { ownsProject } from '@/lib/users';
-import { listTerms, supportsTerms } from '@/lib/wordpress';
+import { clearTaxonomySupportCache, listTerms, supportsTerms } from '@/lib/wordpress';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   const session = await auth();
   if (!session?.user?.email) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -19,6 +19,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!ownsProject(project.ownerEmail, session.user.email)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  // Escape hatch for "I just installed the mu-plugin and the dashboard still
+  // says n/a": skip the (short) support cache and ask WordPress again.
+  if (new URL(req.url).searchParams.get('recheck') === '1') {
+    clearTaxonomySupportCache();
   }
 
   try {
