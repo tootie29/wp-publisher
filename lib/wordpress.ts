@@ -474,25 +474,63 @@ export async function postExists(
 
 // Flip an existing post/page to "publish" and return its live URL. Used by the
 // dashboard's "Publish" button on the Drafts tab.
+// True for WordPress's placeholder URL (?p=123 / ?page_id=123). Core hands this
+// back instead of a permalink whenever a post's status isn't publicly viewable
+// — draft, pending, and notably `future` (see wp_force_plain_post_permalink).
+// It is not a permalink: it 401s for logged-out visitors and changes to the real
+// URL once the post goes live, so it must never be written to a sheet as
+// "the published URL".
+export function isPlaceholderLink(link: string): boolean {
+  return /[?&](p|page_id)=\d+/.test(link || '');
+}
+
+// Ask WordPress to publish a post/page.
+//
+// Returns the status WP actually settled on, which is not always the one asked
+// for: a post carrying a future date_gmt (as blog spacing assigns) comes back as
+// `future` — scheduled, not live — and its link is the ?p= placeholder. Callers
+// must check `status` rather than assume the publish took.
+//
+// `publishNow` clears the scheduled date so the post goes live immediately,
+// overriding any spacing that was assigned to it.
 export async function publishPost(
   project: ProjectConfig,
   route: PageTypeRoute,
-  postId: number
-): Promise<{ id: number; link: string; editLink: string }> {
+  postId: number,
+  publishNow = false
+): Promise<{ id: number; link: string; editLink: string; status: string; dateGmt: string }> {
   const base = project.wordpress.baseUrl.replace(/\/+$/, '');
   const path = route === 'post' ? 'posts' : 'pages';
-  const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
+  const body: Record<string, unknown> = { status: 'publish' };
+  // Re-stamping the date to now is what actually makes a scheduled post go
+  // live; without it WP just re-schedules it.
+  if (publishNow) body.date_gmt = new Date().toISOString().slice(0, 19);
+
+  // context=edit so the response carries `status` — the view context omits it,
+  // which is why this went unnoticed.
+  const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}?context=edit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: authHeader(project) },
-    body: JSON.stringify({ status: 'publish' }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`WP publish ${route} ${postId} failed (${res.status}): ${text.slice(0, 300)}`);
   }
-  const data = (await res.json()) as { id: number; link: string };
+  const data = (await res.json()) as {
+    id: number;
+    link: string;
+    status?: string;
+    date_gmt?: string;
+  };
   const editLink = `${base}/wp-admin/post.php?post=${data.id}&action=edit`;
-  return { id: data.id, link: data.link, editLink };
+  return {
+    id: data.id,
+    link: data.link,
+    editLink,
+    status: data.status || 'unknown',
+    dateGmt: data.date_gmt || '',
+  };
 }
 
 // Upload an image (raw bytes) to the WordPress media library. Returns the new
