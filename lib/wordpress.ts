@@ -337,6 +337,59 @@ export async function resolveTerms(
   return { ids, created, failed };
 }
 
+// Every category/tag on the site, for the dashboard's term autocomplete and for
+// turning a post's term ids back into names. Pages through WP's 100-per-page
+// cap; stops at 1000 terms (well past any sane site's category list).
+export async function listTerms(
+  project: ProjectConfig,
+  taxonomy: 'categories' | 'tags'
+): Promise<{ id: number; name: string }[]> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const out: { id: number; name: string }[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(
+      `${base}/wp-json/wp/v2/${taxonomy}?per_page=100&page=${page}&orderby=name&order=asc&_fields=id,name`,
+      { headers: { Authorization: authHeader(project) }, cache: 'no-store' }
+    );
+    if (!res.ok) break;
+    const list = (await res.json()) as { id: number; name: string }[];
+    out.push(...list);
+    if (list.length < 100) break;
+  }
+  return out;
+}
+
+// Replace a post's categories/tags without touching its content. Unlike the
+// create/update paths, an empty array IS sent here — clearing every term is a
+// legitimate edit when the user removes the last chip.
+export async function setPostTerms(
+  project: ProjectConfig,
+  route: PageTypeRoute,
+  postId: number,
+  terms: PostTerms
+): Promise<{ categories: number[]; tags: number[] }> {
+  if (route !== 'post') {
+    throw new Error('WordPress pages have no categories or tags');
+  }
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const body: Record<string, unknown> = {};
+  if (terms.categories) body.categories = terms.categories;
+  if (terms.tags) body.tags = terms.tags;
+  if (Object.keys(body).length === 0) throw new Error('No taxonomies to update');
+
+  const res = await fetch(`${base}/wp-json/wp/v2/posts/${postId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: authHeader(project) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`WP term update on post ${postId} failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as { categories?: number[]; tags?: number[] };
+  return { categories: data.categories || [], tags: data.tags || [] };
+}
+
 // Check whether a post/page with the given id still exists on the WordPress
 // site. Returns false on 404 (or trash, which the REST API also returns 404
 // for unless ?context=edit). Used to auto-clean stale local history when

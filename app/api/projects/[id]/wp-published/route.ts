@@ -7,6 +7,7 @@ import { auth } from '@/lib/auth';
 import { getProject } from '@/lib/projects';
 import { getProcessed } from '@/lib/state';
 import { ownsProject } from '@/lib/users';
+import { listTerms } from '@/lib/wordpress';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,9 @@ interface WpItem {
     og_description?: string;
   };
   meta?: Record<string, unknown>;
+  // Term ids — posts only; WP omits these on pages.
+  categories?: number[];
+  tags?: number[];
 }
 
 interface PublishedRow {
@@ -38,6 +42,8 @@ interface PublishedRow {
   editLink: string;
   date: string;
   modified: string;
+  categories: string[];   // term names; always empty for pages
+  tags: string[];
 }
 
 function authHeader(username: string, appPassword: string): string {
@@ -52,7 +58,7 @@ async function fetchType(
   appPassword: string,
   perPage: number
 ): Promise<WpItem[]> {
-  const url = `${base}/wp-json/wp/v2/${type}?status=publish&per_page=${perPage}&orderby=modified&order=desc&_fields=id,date,modified,link,title,status,type,yoast_head_json,meta`;
+  const url = `${base}/wp-json/wp/v2/${type}?status=publish&per_page=${perPage}&orderby=modified&order=desc&_fields=id,date,modified,link,title,status,type,yoast_head_json,meta,categories,tags`;
   const res = await fetch(url, {
     headers: { Authorization: authHeader(username, appPassword) },
     cache: 'no-store',
@@ -81,10 +87,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const password = project.wordpress.appPassword;
 
   try {
-    const [posts, pages] = await Promise.all([
+    // Term lists turn each post's category/tag ids into names. Best-effort:
+    // if they fail, the rest of the listing is still worth showing, so terms
+    // just render empty rather than erroring the whole tab.
+    const [posts, pages, categoryTerms, tagTerms] = await Promise.all([
       fetchType(base, 'posts', username, password, limit),
       fetchType(base, 'pages', username, password, limit),
+      listTerms(project, 'categories').catch(() => []),
+      listTerms(project, 'tags').catch(() => []),
     ]);
+    const categoryNameById = new Map(categoryTerms.map((t) => [t.id, t.name]));
+    const tagNameById = new Map(tagTerms.map((t) => [t.id, t.name]));
 
     // Build a wpId → keyword map from our local published history so we can fill
     // the keyword column for items this app created. Items the WP site already
@@ -120,6 +133,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
           editLink: `${base}/wp-admin/post.php?post=${it.id}&action=edit`,
           date: it.date,
           modified: it.modified,
+          categories: (it.categories || [])
+            .map((cid) => categoryNameById.get(cid) || '')
+            .filter(Boolean),
+          tags: (it.tags || []).map((tid) => tagNameById.get(tid) || '').filter(Boolean),
         };
       })
       .sort((a, b) => +new Date(b.modified) - +new Date(a.modified))

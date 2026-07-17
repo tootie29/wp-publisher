@@ -2,11 +2,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Play, RefreshCw, CheckCircle2, AlertCircle, Loader2, ExternalLink,
   Pencil, FileText, Clock, RotateCcw, AlertTriangle, LogIn, LogOut,
-  Inbox, Radio, Sparkles, Pause, PlayCircle, Square, Search, X, Trash2, Rocket,
+  Inbox, Radio, Sparkles, Pause, PlayCircle, Square, Search, X, Trash2, Rocket, Plus,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -96,6 +96,8 @@ interface WpPublishedRow {
   metaTitle: string;
   metaDescription: string;
   keyword: string;
+  categories: string[];
+  tags: string[];
   link: string;
   editLink: string;
   date: string;
@@ -1376,6 +1378,138 @@ function EditableSeoCell({
   );
 }
 
+// Chip editor for one post's categories or tags. Chips remove on ×; the input
+// adds on Enter, comma, or blur. Each change round-trips to WordPress
+// immediately (same as the SEO cells) — with the parent list updated optimistically
+// and rolled back if the save fails.
+function EditableTermsCell({
+  values,
+  suggestions,
+  label,
+  tone,
+  disabled,
+  disabledHint,
+  onSave,
+}: {
+  values: string[];
+  suggestions: string[];
+  label: string;
+  tone: 'category' | 'tag';
+  disabled?: boolean;
+  disabledHint?: string;
+  onSave: (next: string[]) => Promise<void>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listId = useId();
+
+  if (disabled) {
+    return <span className="text-white/20 text-xs" title={disabledHint}>n/a</span>;
+  }
+
+  async function commit(next: string[]) {
+    setError(null);
+    setSaving(true);
+    try {
+      await onSave(next);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addDraft() {
+    // Accept a pasted "a, b, c" in one go.
+    const names = draft.split(',').map((s) => s.trim()).filter(Boolean);
+    setDraft('');
+    setAdding(false);
+    if (!names.length) return;
+    const existing = new Set(values.map((v) => v.toLowerCase()));
+    const fresh = names.filter((n) => !existing.has(n.toLowerCase()));
+    if (!fresh.length) return; // already on the post — nothing to save
+    void commit([...values, ...fresh]);
+  }
+
+  const chipClass =
+    tone === 'category'
+      ? 'bg-emerald-500/10 text-emerald-300/90 hover:bg-emerald-500/20'
+      : 'bg-white/5 text-white/60 hover:bg-white/10';
+
+  // Don't suggest terms already on the post.
+  const onPost = new Set(values.map((v) => v.toLowerCase()));
+  const available = suggestions.filter((s) => !onPost.has(s.toLowerCase()));
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1 items-center">
+        {values.map((v) => (
+          <span
+            key={v}
+            className={`group text-[11px] px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${chipClass}`}
+          >
+            {tone === 'tag' ? `#${v}` : v}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void commit(values.filter((x) => x !== v))}
+              className="opacity-40 group-hover:opacity-100 hover:text-red-300 disabled:opacity-20"
+              title={`Remove ${v}`}
+              aria-label={`Remove ${v}`}
+            >
+              <X className="w-2.5 h-2.5" />
+            </button>
+          </span>
+        ))}
+
+        {adding ? (
+          <>
+            <input
+              autoFocus
+              value={draft}
+              list={listId}
+              disabled={saving}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={addDraft}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ',') {
+                  e.preventDefault();
+                  addDraft();
+                } else if (e.key === 'Escape') {
+                  setDraft('');
+                  setAdding(false);
+                }
+              }}
+              placeholder={`Add ${label}…`}
+              className="bg-white/5 border border-white/20 rounded px-1.5 py-0.5 text-[11px] text-white/90 w-28 focus:outline-none focus:border-blue-400/60"
+            />
+            <datalist id={listId}>
+              {available.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+          </>
+        ) : (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setAdding(true)}
+            className="text-[11px] text-white/30 hover:text-white/70 inline-flex items-center gap-0.5 disabled:opacity-40"
+            title={`Add a ${label}. Type a new name to create it in WordPress.`}
+          >
+            <Plus className="w-2.5 h-2.5" /> {values.length ? '' : `Add ${label}`}
+          </button>
+        )}
+
+        {saving && <Loader2 className="w-3 h-3 animate-spin text-blue-300/70" />}
+      </div>
+      {error && <div className="text-[11px] text-red-300/90 break-words">{error}</div>}
+    </div>
+  );
+}
+
 function WpPublishedTable({
   projectId,
   items,
@@ -1390,6 +1524,50 @@ function WpPublishedTable({
   onItemUpdated: (row: WpPublishedRow) => void;
 }) {
   const [q, setQ] = useState('');
+  // Existing site terms, for the add-term autocomplete. Loaded once; refreshed
+  // after a save that created something new so the next dropdown includes it.
+  const [terms, setTerms] = useState<{ categories: string[]; tags: string[] }>({
+    categories: [],
+    tags: [],
+  });
+
+  const loadTerms = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/terms`);
+      const data = (await res.json()) as { categories?: string[]; tags?: string[]; error?: string };
+      if (!data.error) {
+        setTerms({ categories: data.categories || [], tags: data.tags || [] });
+      }
+    } catch {
+      // Autocomplete is a convenience — typing a term still works without it.
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadTerms();
+  }, [loadTerms]);
+
+  async function saveTerms(
+    it: WpPublishedRow,
+    taxonomy: 'categories' | 'tags',
+    next: string[]
+  ) {
+    const res = await fetch(`/api/projects/${projectId}/wp-published/${it.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: it.type, [taxonomy]: next }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      categories?: string[];
+      tags?: string[];
+    };
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    // Trust the server's echo — it carries WordPress's canonical spelling.
+    onItemUpdated({ ...it, [taxonomy]: data[taxonomy] ?? next });
+    void loadTerms();
+  }
 
   async function saveField(it: WpPublishedRow, field: EditableField, next: string) {
     const res = await fetch(`/api/projects/${projectId}/wp-published/${it.id}`, {
@@ -1425,7 +1603,9 @@ function WpPublishedTable({
       (it.metaDescription || '').toLowerCase().includes(needle) ||
       (it.keyword || '').toLowerCase().includes(needle) ||
       (it.type || '').toLowerCase().includes(needle) ||
-      (it.link || '').toLowerCase().includes(needle)
+      (it.link || '').toLowerCase().includes(needle) ||
+      (it.categories || []).some((c) => c.toLowerCase().includes(needle)) ||
+      (it.tags || []).some((t) => t.toLowerCase().includes(needle))
     );
   }, [items, q]);
 
@@ -1477,6 +1657,8 @@ function WpPublishedTable({
             <th className="py-2 pr-3 w-[18%]">SEO Title</th>
             <th className="py-2 pr-3">Meta Description</th>
             <th className="py-2 pr-3 w-[16%]">Keyword</th>
+            <th className="py-2 pr-3 w-[15%]">Categories</th>
+            <th className="py-2 pr-3 w-[15%]">Tags</th>
             <th className="py-2 pr-3 w-32">Actions</th>
           </tr>
         </thead>
@@ -1567,6 +1749,28 @@ function WpPublishedTable({
                       </span>
                     )
                   }
+                />
+              </td>
+              <td className="py-2 pr-3">
+                <EditableTermsCell
+                  values={it.categories || []}
+                  suggestions={terms.categories}
+                  label="category"
+                  tone="category"
+                  disabled={it.type === 'page'}
+                  disabledHint="WordPress pages have no categories."
+                  onSave={(next) => saveTerms(it, 'categories', next)}
+                />
+              </td>
+              <td className="py-2 pr-3">
+                <EditableTermsCell
+                  values={it.tags || []}
+                  suggestions={terms.tags}
+                  label="tag"
+                  tone="tag"
+                  disabled={it.type === 'page'}
+                  disabledHint="WordPress pages have no tags."
+                  onSave={(next) => saveTerms(it, 'tags', next)}
                 />
               </td>
               <td className="py-2 pr-3">
