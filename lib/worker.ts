@@ -8,7 +8,43 @@ import { uploadAndRewriteImages } from './media';
 import { log } from './logger';
 import { getProcessedRecord, hasProcessed, latestScheduledBlogDate, markProcessed, removeProcessed } from './state';
 import { getLiveState, updateLiveState } from './live-state';
-import type { ProjectConfig, QueueRow } from './types';
+import type { PageTypeRoute, ProjectConfig, QueueRow } from './types';
+
+// Combine term-name lists, dropping case-insensitive duplicates but keeping the
+// first spelling seen. Guards against tagging a page twice when its Page Type
+// already appears in the Tags column ("Location Page" + "location page").
+function mergeTerms(...lists: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of lists.flat()) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+// Which category/tag names a row should end up with, before they're resolved to
+// WordPress term ids.
+//
+// Page rows also get their Page Type as a tag ("Location Page", "Practice Area
+// Page", "Cluster Content"), so pages stay groupable by their content model.
+// Deliberately not done for blogs: their Page Type is just "Blog", which would
+// put an identical, useless tag on every post.
+export function termsForRow(
+  row: Pick<QueueRow, 'categories' | 'tags' | 'pageType'>,
+  effectiveRoute: PageTypeRoute
+): { categories: string[]; tags: string[]; pageTypeTag: string } {
+  const pageTypeTag = effectiveRoute === 'page' ? (row.pageType || '').trim() : '';
+  return {
+    categories: mergeTerms(row.categories),
+    tags: pageTypeTag ? mergeTerms(row.tags, [pageTypeTag]) : mergeTerms(row.tags),
+    pageTypeTag,
+  };
+}
 
 export async function processRow(project: ProjectConfig, row: QueueRow, runnerEmail: string) {
   const { rowIndex } = row;
@@ -191,11 +227,12 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
   // failing a row whose content is otherwise fine.
   const effectiveRoute = found ? found.type : route;
   const terms: PostTerms = {};
-  const hasSheetTerms = row.categories.length > 0 || row.tags.length > 0;
+  const { pageTypeTag, ...desiredTerms } = termsForRow(row, effectiveRoute);
+  const hasSheetTerms = desiredTerms.categories.length > 0 || desiredTerms.tags.length > 0;
   const routeTakesTerms = hasSheetTerms ? await supportsTerms(project, effectiveRoute) : false;
   if (routeTakesTerms) {
     for (const taxonomy of ['categories', 'tags'] as const) {
-      const names = row[taxonomy];
+      const names = desiredTerms[taxonomy];
       if (!names.length) continue;
       const { ids, created, failed } = await resolveTerms(project, taxonomy, names);
       terms[taxonomy] = ids;
@@ -208,8 +245,9 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     }
     log(project.id, 'info', 'Assigning taxonomy terms', {
       route: effectiveRoute,
-      categories: row.categories,
-      tags: row.tags,
+      categories: desiredTerms.categories,
+      tags: desiredTerms.tags,
+      pageTypeTag: pageTypeTag || null,
       categoryIds: terms.categories ?? [],
       tagIds: terms.tags ?? [],
     }, rowIndex);
@@ -217,7 +255,7 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     log(project.id, 'warn',
       `Row ${rowIndex} has categories/tags but this site's ${effectiveRoute}s have no categories or tags registered, so they were ignored. ` +
       `Install/update the wp-publisher-yoast-rest mu-plugin to enable them on ${effectiveRoute}s.`,
-      { categories: row.categories, tags: row.tags, route: effectiveRoute }, rowIndex
+      { categories: desiredTerms.categories, tags: desiredTerms.tags, route: effectiveRoute }, rowIndex
     );
   }
 
