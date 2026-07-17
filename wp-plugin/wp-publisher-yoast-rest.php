@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Publisher — REST Support
  * Description: Exposes the Yoast SEO focus keyphrase, meta title (raw template), and meta description on the WordPress REST API for posts and pages, and attaches categories/tags to pages, so the WP Publisher dashboard can read and edit them.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: Internal
  * License: GPL-2.0-or-later
  */
@@ -42,30 +42,15 @@ add_action('init', function () {
     // registering here is what makes /wp/v2/pages accept and return
     // `categories` and `tags`, and is what the dashboard probes for via
     // /wp/v2/types/page.
+    //
+    // This registration is ALL that's needed — do not add taxonomy metaboxes on
+    // top of it. Core's register_and_do_post_meta_boxes() already loops over
+    // get_object_taxonomies() and adds a box per taxonomy (wp-admin/includes/
+    // meta-boxes.php), and the block editor renders its own native panel from
+    // the same registration. Adding our own produced a second Categories and
+    // Tags box in the page sidebar: the block editor swaps out core's boxes by
+    // their known ids (categorydiv / tagsdiv-post_tag) but can't recognize a
+    // custom id, so ours rendered again underneath as legacy metaboxes.
     register_taxonomy_for_object_type('category', 'page');
     register_taxonomy_for_object_type('post_tag', 'page');
-});
-
-// Pages don't get a taxonomy metabox from core just because the taxonomy is
-// registered for them — without this, terms set by the dashboard would be
-// invisible (and unremovable) to anyone editing the page in wp-admin.
-add_action('add_meta_boxes_page', function () {
-    add_meta_box(
-        'wp_publisher_page_categories',
-        __('Categories'),
-        'post_categories_meta_box',
-        'page',
-        'side',
-        'default',
-        ['taxonomy' => 'category']
-    );
-    add_meta_box(
-        'wp_publisher_page_tags',
-        __('Tags'),
-        'post_tags_meta_box',
-        'page',
-        'side',
-        'default',
-        ['taxonomy' => 'post_tag']
-    );
 });
