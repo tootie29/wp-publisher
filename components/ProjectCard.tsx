@@ -1680,18 +1680,22 @@ function WpPublishedTable({
         <div className="text-white/40 text-xs py-6 text-center">No published items match "{q}".</div>
       ) : (
       <div className="overflow-x-auto">
-      <table className="w-full text-sm table-fixed">
+      {/* table-fixed divides the row by these widths, so they must cover every
+          column and sum to 100% — a column left without one gets only the
+          leftover, which mixing in px widths can drive to zero. The min-width
+          lets the wrapper scroll on a narrow card instead of crushing cells. */}
+      <table className="w-full text-sm table-fixed min-w-[1360px]">
         <thead className="text-left text-white/40 border-b border-white/10">
           <tr>
-            <th className="py-2 pr-3 w-28">Last modified</th>
-            <th className="py-2 pr-3 w-16">Type</th>
-            <th className="py-2 pr-3 w-[18%]">Title</th>
-            <th className="py-2 pr-3 w-[18%]">SEO Title</th>
-            <th className="py-2 pr-3">Meta Description</th>
-            <th className="py-2 pr-3 w-[16%]">Keyword</th>
-            <th className="py-2 pr-3 w-[15%]">Categories</th>
-            <th className="py-2 pr-3 w-[15%]">Tags</th>
-            <th className="py-2 pr-3 w-32">Actions</th>
+            <th className="py-2 pr-3 w-[7%]">Last modified</th>
+            <th className="py-2 pr-3 w-[5%]">Type</th>
+            <th className="py-2 pr-3 w-[13%]">Title</th>
+            <th className="py-2 pr-3 w-[14%]">SEO Title</th>
+            <th className="py-2 pr-3 w-[18%]">Meta Description</th>
+            <th className="py-2 pr-3 w-[11%]">Keyword</th>
+            <th className="py-2 pr-3 w-[13%]">Categories</th>
+            <th className="py-2 pr-3 w-[13%]">Tags</th>
+            <th className="py-2 pr-3 w-[6%]">Actions</th>
           </tr>
         </thead>
         <tbody>
