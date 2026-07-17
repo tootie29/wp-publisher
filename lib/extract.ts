@@ -17,13 +17,20 @@ export function hasProfile(projectId: string): boolean {
   return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
 }
 
-export function classifyLink(url: string): 'gdoc' | 'frase' | 'surfer' | 'unknown' {
+export function classifyLink(url: string): 'gdoc' | 'frase' | 'surfer' | 'html' | 'unknown' {
   try {
     const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'unknown';
     const h = u.hostname.toLowerCase();
     if (h.includes('docs.google.com') || h.includes('drive.google.com')) return 'gdoc';
     if (h.includes('frase.io')) return 'frase';
     if (h.includes('surferseo.com') || h.includes('app.surferseo.com')) return 'surfer';
+    // A self-hosted .html article (e.g. a Frase export saved to the site's own
+    // uploads dir). Matched on the file extension rather than the host, since
+    // every client hosts these somewhere different. Deliberately narrow: a bare
+    // URL with no .html/.htm stays 'unknown' so a stray link in the sheet errors
+    // out instead of being published as an article.
+    if (/\.html?$/i.test(u.pathname)) return 'html';
     return 'unknown';
   } catch {
     return 'unknown';
@@ -122,6 +129,80 @@ export async function extractFromGoogleDoc(url: string): Promise<ExtractedConten
     title: firstHeading || title,
     htmlBody: wrapLists(parts.join('\n')),
     sourceType: 'gdoc',
+  };
+}
+
+/* -------------------- Static HTML -------------------- */
+
+// A self-hosted .html article — typically a Frase/Surfer export written to the
+// client site's own uploads dir. These are plain server-rendered documents on a
+// public URL, so unlike the SaaS sources they need no session, no extension and
+// no headless browser: a fetch and a parse is the whole job.
+export async function extractFromStaticHtml(url: string): Promise<ExtractedContent> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        // Some hosts (Cloudways among them) serve a challenge page to clients
+        // with no UA rather than the file.
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+          '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      },
+    });
+  } catch (e) {
+    throw new Error(`Could not reach ${url}: ${(e as Error).message}`);
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Fetching the content file returned ${res.status}. Check the link in the sheet is public and correct: ${url}`
+    );
+  }
+
+  const raw = await res.text();
+  const $ = cheerio.load(raw);
+
+  // The export's own header block ("Keyword #48" + the title) is chrome, not
+  // article body — capture the title from it, then drop the whole block so it
+  // never gets published.
+  const docHeadTitle = $('.doc-head .title').first().text().trim();
+  $('.doc-head').remove();
+  $('script, style, noscript, link, meta').remove();
+
+  // Unwrap a lone <article>/<main> shell so we return the block-level children
+  // directly — the same shape the Surfer/Frase extractors return (an editor's
+  // innerHTML). This matters beyond tidiness: media.ts lifts images out by
+  // walking up to the top-level block, so a single wrapper around everything
+  // would make it treat the whole document as one block and relocate every
+  // image to the end of the post.
+  // cheerio.load() always synthesizes <body>, fragment or full document.
+  let $content = $('body');
+  for (let i = 0; i < 3; i++) {
+    const kids = $content.children();
+    if (kids.length !== 1) break;
+    const tag = (kids.first().prop('tagName') || '').toLowerCase();
+    if (!/^(article|main|section|div)$/.test(tag)) break;
+    $content = kids.first();
+  }
+
+  const bodyHtml = ($content.html() ?? raw).trim();
+  if (!bodyHtml) {
+    throw new Error(`No content found in ${url} — the file's <body> is empty.`);
+  }
+
+  // Prefer the article's own <h1> (stripped from the body so WP doesn't render
+  // the title twice). These exports usually have none — their headings start at
+  // <h2> — so fall back to the doc-head title, then the <title> tag. Unlike
+  // Frase/Surfer app pages, a static export's <title> is the real article title
+  // rather than SaaS branding, so it's worth trusting here.
+  const fallbackTitle = docHeadTitle || $('title').first().text().trim() || '';
+  const promoted = promoteFirstH1ToTitle(bodyHtml, fallbackTitle);
+
+  return {
+    title: promoted.title,
+    htmlBody: promoted.html.trim(),
+    sourceType: 'html',
   };
 }
 
@@ -581,8 +662,14 @@ export async function extractContent(
     content = await extractViaExtensionFetch(url, 'surfer', runnerEmail);
   } else if (kind === 'frase') {
     content = await extractViaExtensionFetch(url, 'frase', runnerEmail);
+  } else if (kind === 'html') {
+    // Public static file — plain server-side fetch, no session needed.
+    content = await extractFromStaticHtml(url);
   } else {
-    throw new Error(`Don't know how to extract from ${url}`);
+    throw new Error(
+      `Don't know how to extract from ${url}. Supported: Google Docs, Surfer, Frase, ` +
+      `or a link to a self-hosted .html article.`
+    );
   }
 
   // Pull SEO Title / Meta Description label lines out of the body and surface

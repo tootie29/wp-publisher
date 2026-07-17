@@ -79,7 +79,7 @@ export interface LogEntry {
 export interface ExtractedContent {
   title: string;
   htmlBody: string;              // WP-ready HTML
-  sourceType: 'gdoc' | 'frase' | 'surfer' | 'unknown';
+  sourceType: 'gdoc' | 'frase' | 'surfer' | 'html' | 'unknown';
   // Captured from "SEO Title:" / "Meta Description:" label lines the writer
   // puts at the top of the content doc. These are stripped out of htmlBody and
   // written to the post's Yoast SEO fields instead. Undefined when absent.
