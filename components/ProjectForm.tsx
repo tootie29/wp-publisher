@@ -93,6 +93,8 @@ export default function ProjectForm({ initial, mode }: Props) {
   const colContentType = cols.contentType ?? '';
   const colTargetUrl = cols.targetUrl ?? '';
   const colPublishedUrl = cols.publishedUrl ?? '';
+  const colCategories = cols.categories ?? '';
+  const colTags = cols.tags ?? '';
 
   async function handleTest() {
     setTesting(true);
@@ -323,6 +325,26 @@ export default function ProjectForm({ initial, mode }: Props) {
               onChange={(e) => updateColumn('publishedUrl', e.target.value)}
               className={inputClass + ' uppercase'} maxLength={2}
               placeholder="e.g. O" />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field
+            label="Categories column (optional)"
+            hint={`Optional. Comma-separated category names per row, e.g. "DUI, Criminal Defense". Categories that don't exist yet are created in WordPress. Blog rows only — pages have no categories.`}
+          >
+            <input type="text" value={colCategories}
+              onChange={(e) => updateColumn('categories', e.target.value)}
+              className={inputClass + ' uppercase'} maxLength={2}
+              placeholder="e.g. P" />
+          </Field>
+          <Field
+            label="Tags column (optional)"
+            hint={`Optional. Comma-separated tag names per row, e.g. "dui, field sobriety test". Tags that don't exist yet are created in WordPress. Blog rows only — pages have no tags.`}
+          >
+            <input type="text" value={colTags}
+              onChange={(e) => updateColumn('tags', e.target.value)}
+              className={inputClass + ' uppercase'} maxLength={2}
+              placeholder="e.g. Q" />
           </Field>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

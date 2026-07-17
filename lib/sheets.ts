@@ -10,6 +10,24 @@ function normalizeContentMode(raw: string): ContentMode {
   return 'new';
 }
 
+// Split a taxonomy cell into term names. Writers separate them inconsistently
+// ("DUI, Criminal Defense" / "DUI; Criminal Defense" / one per line), so accept
+// all three. Dedupes case-insensitively but keeps the first spelling seen —
+// WordPress term names are display strings.
+function splitTerms(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of (raw || '').split(/[,;\n]/)) {
+    const name = part.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
 async function sheets(): Promise<sheets_v4.Sheets> {
   return google.sheets({ version: 'v4', auth: await getAuth() });
 }
@@ -99,6 +117,8 @@ export async function fetchQueue(project: ProjectConfig): Promise<QueueRow[]> {
   const idxLink = colToIdx(columns.contentLink);
   const idxContentType = columns.contentType ? colToIdx(columns.contentType) : -1;
   const idxTargetUrl = columns.targetUrl ? colToIdx(columns.targetUrl) : -1;
+  const idxCategories = columns.categories ? colToIdx(columns.categories) : -1;
+  const idxTags = columns.tags ? colToIdx(columns.tags) : -1;
 
   const trigger = triggerValue.trim().toLowerCase();
   const queue: QueueRow[] = [];
@@ -139,6 +159,8 @@ export async function fetchQueue(project: ProjectConfig): Promise<QueueRow[]> {
       contentType,
       contentMode: normalizeContentMode(contentType),
       targetUrl,
+      categories: idxCategories >= 0 ? splitTerms(r[idxCategories]?.text || '') : [],
+      tags: idxTags >= 0 ? splitTerms(r[idxTags]?.text || '') : [],
     });
   }
   return queue;

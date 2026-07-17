@@ -2,7 +2,7 @@
 import { listProjects } from './projects';
 import { fetchQueue, setRowStatus } from './sheets';
 import { extractContent } from './extract';
-import { createDraft, findPostByTitle, findPostByUrl, getLatestPostDate, postExists, resolveRoute, updatePost, updateYoastMeta } from './wordpress';
+import { createDraft, findPostByTitle, findPostByUrl, getLatestPostDate, postExists, resolveRoute, resolveTerms, updatePost, updateYoastMeta, type PostTerms } from './wordpress';
 import { htmlToBlocks } from './blocks';
 import { uploadAndRewriteImages } from './media';
 import { log } from './logger';
@@ -183,11 +183,44 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
     }
   }
 
+  // Per-row categories/tags from the sheet. WordPress only accepts term ids,
+  // so names are resolved (and created when new) first. Pages have no
+  // taxonomies — skip the lookups entirely unless this row lands on a post.
+  // Best-effort: unresolvable terms warn and are dropped rather than failing a
+  // row whose content is otherwise fine.
+  const effectiveRoute = found ? found.type : route;
+  const terms: PostTerms = {};
+  if (effectiveRoute === 'post' && (row.categories.length || row.tags.length)) {
+    for (const taxonomy of ['categories', 'tags'] as const) {
+      const names = row[taxonomy];
+      if (!names.length) continue;
+      const { ids, created, failed } = await resolveTerms(project, taxonomy, names);
+      terms[taxonomy] = ids;
+      if (created.length) {
+        log(project.id, 'info', `Created new ${taxonomy} in WordPress: ${created.join(', ')}`, { created }, rowIndex);
+      }
+      for (const f of failed) {
+        log(project.id, 'warn', `Could not resolve ${taxonomy} "${f.name}": ${f.error}. Skipping that term.`, { term: f.name }, rowIndex);
+      }
+    }
+    log(project.id, 'info', 'Assigning taxonomy terms', {
+      categories: row.categories,
+      tags: row.tags,
+      categoryIds: terms.categories ?? [],
+      tagIds: terms.tags ?? [],
+    }, rowIndex);
+  } else if (effectiveRoute === 'page' && (row.categories.length || row.tags.length)) {
+    log(project.id, 'warn',
+      `Row ${rowIndex} has categories/tags but routes to a page — WordPress pages have no categories or tags, so they were ignored.`,
+      { categories: row.categories, tags: row.tags }, rowIndex
+    );
+  }
+
   let wp;
   try {
     wp = found
-      ? await updatePost(project, found.type, found.id, gutenberg, title)
-      : await createDraft(project, route, title, gutenberg, createDateGmt);
+      ? await updatePost(project, found.type, found.id, gutenberg, title, terms)
+      : await createDraft(project, route, title, gutenberg, createDateGmt, terms);
   } catch (e) {
     log(project.id, 'error',
       found
@@ -205,9 +238,8 @@ export async function processRow(project: ProjectConfig, row: QueueRow, runnerEm
   // mu-plugin isn't installed) warns but doesn't fail the row.
   const focusKeyphrase = (row.primaryKeyword || '').trim();
   if (extracted.metaTitle || extracted.metaDescription || focusKeyphrase) {
-    const seoRoute = found ? found.type : route;
     try {
-      const applied = await updateYoastMeta(project, seoRoute, wp.id, {
+      const applied = await updateYoastMeta(project, effectiveRoute, wp.id, {
         metaTitle: extracted.metaTitle,
         metaDescription: extracted.metaDescription,
         keyword: focusKeyphrase || undefined,

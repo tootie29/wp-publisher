@@ -22,6 +22,13 @@ function endpoint(project: ProjectConfig, route: PageTypeRoute): string {
   return `${base}/wp-json/wp/v2/${path}`;
 }
 
+// Category/tag term ids to assign. Post-route only — WordPress pages have no
+// taxonomies and reject these params.
+export interface PostTerms {
+  categories?: number[];
+  tags?: number[];
+}
+
 export async function createDraft(
   project: ProjectConfig,
   route: PageTypeRoute,
@@ -31,7 +38,8 @@ export async function createDraft(
   // date is stamped to this slot. Status is left as the project's publishStatus
   // — so a 'draft' stays a dated draft, while a 'publish' project lets WP
   // schedule it as 'future' automatically.
-  dateGmt?: string
+  dateGmt?: string,
+  terms?: PostTerms
 ): Promise<{ id: number; link: string; editLink: string }> {
   const body: Record<string, unknown> = {
     title,
@@ -39,6 +47,10 @@ export async function createDraft(
     status: project.publishStatus, // usually 'draft'
   };
   if (dateGmt) body.date_gmt = dateGmt;
+  if (route === 'post') {
+    if (terms?.categories?.length) body.categories = terms.categories;
+    if (terms?.tags?.length) body.tags = terms.tags;
+  }
   const res = await fetch(endpoint(project, route), {
     method: 'POST',
     headers: {
@@ -176,12 +188,17 @@ export async function updatePost(
   route: PageTypeRoute,
   postId: number,
   htmlContent: string,
-  title?: string
+  title?: string,
+  terms?: PostTerms
 ): Promise<{ id: number; link: string; editLink: string }> {
   const base = project.wordpress.baseUrl.replace(/\/+$/, '');
   const path = route === 'post' ? 'posts' : 'pages';
   const body: Record<string, unknown> = { content: htmlContent };
   if (title) body.title = title;
+  if (route === 'post') {
+    if (terms?.categories?.length) body.categories = terms.categories;
+    if (terms?.tags?.length) body.tags = terms.tags;
+  }
   const res = await fetch(`${base}/wp-json/wp/v2/${path}/${postId}`, {
     method: 'POST',
     headers: {
@@ -237,6 +254,87 @@ export async function updateYoastMeta(
     metaDescription: m['_yoast_wpseo_metadesc'] || '',
     keyword: m['_yoast_wpseo_focuskw'] || '',
   };
+}
+
+// Resolve category/tag names from the sheet into WordPress term ids, creating
+// any that don't exist yet. WP's REST API only accepts term ids on a post, so
+// this lookup is unavoidable.
+//
+// Matching is case-insensitive on the term name, and also checks the slug —
+// "Criminal Defense" and "criminal-defense" are the same term to WordPress, and
+// creating a duplicate would silently 400 with `term_exists`. We treat that
+// error as a hit and reuse the id it reports.
+//
+// Best-effort per name: a term that can't be resolved is logged by the caller
+// and dropped rather than failing the whole row.
+export async function resolveTerms(
+  project: ProjectConfig,
+  taxonomy: 'categories' | 'tags',
+  names: string[]
+): Promise<{ ids: number[]; created: string[]; failed: { name: string; error: string }[] }> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const ids: number[] = [];
+  const created: string[] = [];
+  const failed: { name: string; error: string }[] = [];
+
+  for (const name of names) {
+    const wanted = name.trim().toLowerCase();
+    const wantedSlug = slugify(name);
+    try {
+      // 1. Look for an existing term. `search` is fuzzy, so compare exactly.
+      const res = await fetch(
+        `${base}/wp-json/wp/v2/${taxonomy}?search=${encodeURIComponent(name)}&per_page=100&_fields=id,name,slug`,
+        { headers: { Authorization: authHeader(project) }, cache: 'no-store' }
+      );
+      if (res.ok) {
+        const list = (await res.json()) as Array<{ id: number; name: string; slug: string }>;
+        const hit = list.find(
+          (t) =>
+            normalizeTitle(t.name) === normalizeTitle(name) ||
+            (t.name || '').trim().toLowerCase() === wanted ||
+            (wantedSlug && t.slug === wantedSlug)
+        );
+        if (hit) {
+          ids.push(hit.id);
+          continue;
+        }
+      }
+
+      // 2. Not found — create it.
+      const createRes = await fetch(`${base}/wp-json/wp/v2/${taxonomy}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: authHeader(project) },
+        body: JSON.stringify({ name }),
+      });
+      if (createRes.ok) {
+        const data = (await createRes.json()) as { id: number };
+        ids.push(data.id);
+        created.push(name);
+        continue;
+      }
+
+      // WP returns 400 `term_exists` when the name collides with a term the
+      // search above missed (e.g. a child term). The existing id comes back in
+      // the error payload — use it.
+      const errBody = (await createRes.json().catch(() => null)) as {
+        code?: string;
+        message?: string;
+        data?: { term_id?: number; status?: number };
+      } | null;
+      if (errBody?.code === 'term_exists' && errBody.data?.term_id) {
+        ids.push(errBody.data.term_id);
+        continue;
+      }
+      failed.push({
+        name,
+        error: errBody?.message || `${createRes.status} creating ${taxonomy} term`,
+      });
+    } catch (e) {
+      failed.push({ name, error: (e as Error).message });
+    }
+  }
+
+  return { ids, created, failed };
 }
 
 // Check whether a post/page with the given id still exists on the WordPress

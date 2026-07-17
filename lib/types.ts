@@ -23,6 +23,11 @@ export interface ProjectConfig {
       contentType?: string;      // e.g. 'M' — values: "New Content" | "Content Refresh"
       targetUrl?: string;        // e.g. 'N' — required for refresh rows: the existing WP post/page URL to overwrite
       publishedUrl?: string;     // e.g. 'O' — where the live URL is written when a draft is published from the dashboard
+      // Optional per-row taxonomy columns. Cells hold comma-separated term
+      // names ("DUI, Criminal Defense"). Terms that don't exist in WP are
+      // created. Only apply to post-route rows — pages have no taxonomies.
+      categories?: string;       // e.g. 'P'
+      tags?: string;             // e.g. 'Q'
     };
     headerRow: number;           // usually 1, data starts on headerRow + 1
     triggerValue: string;        // 'In-progress' (case-insensitive match)
@@ -56,6 +61,8 @@ export interface QueueRow {
   contentType: string;           // raw cell value (for display/logging)
   contentMode: ContentMode;      // normalized — 'new' or 'refresh'
   targetUrl: string;             // existing WP URL when contentMode === 'refresh'
+  categories: string[];          // term names from the Categories column (empty when unmapped/blank)
+  tags: string[];                // term names from the Tags column
 }
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'success';

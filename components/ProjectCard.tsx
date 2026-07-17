@@ -36,7 +36,10 @@ interface PublicProject {
   sheet: {
     sheetId: string;
     tabName: string;
-    columns: { status: string; pageType: string; primaryKeyword: string; contentLink: string };
+    columns: {
+      status: string; pageType: string; primaryKeyword: string; contentLink: string;
+      categories?: string; tags?: string;
+    };
     triggerValue: string;
     completedValue: string;
   };
@@ -47,6 +50,7 @@ interface PublicProject {
 interface QueueItem {
   projectId: string; rowIndex: number; status: string;
   pageType: string; primaryKeyword: string; contentLink: string;
+  categories?: string[]; tags?: string[];
 }
 
 interface RequeueRow {
@@ -643,6 +647,45 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
+// Categories/tags for one queue row. Pages have no taxonomies, so terms on a
+// page-routed row are shown struck through — they'll be ignored at publish time
+// and this is the cheapest place to notice the mismatch.
+function TermChips({
+  categories, tags, route,
+}: {
+  categories?: string[];
+  tags?: string[];
+  route: 'post' | 'page';
+}) {
+  const cats = categories || [];
+  const tgs = tags || [];
+  if (!cats.length && !tgs.length) return <span className="text-white/25 text-xs">—</span>;
+  const ignored = route === 'page';
+  return (
+    <div
+      className={`flex flex-wrap gap-1 ${ignored ? 'opacity-50' : ''}`}
+      title={ignored ? 'Pages have no categories or tags — these are ignored.' : undefined}
+    >
+      {cats.map((c) => (
+        <span
+          key={`c-${c}`}
+          className={`text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300/90 ${ignored ? 'line-through' : ''}`}
+        >
+          {c}
+        </span>
+      ))}
+      {tgs.map((t) => (
+        <span
+          key={`t-${t}`}
+          className={`text-[11px] px-1.5 py-0.5 rounded bg-white/5 text-white/60 ${ignored ? 'line-through' : ''}`}
+        >
+          #{t}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function QueueTable({
   queue, alreadyPublished, projectId, onChange, project, liveRow, livePhase,
 }: {
@@ -656,6 +699,9 @@ function QueueTable({
 }) {
   const [q, setQ] = useState('');
   const [requeuing, setRequeuing] = useState<number | null>(null);
+
+  // Only take up a column when the project actually maps taxonomy columns.
+  const showTerms = Boolean(project.sheet.columns.categories || project.sheet.columns.tags);
 
   async function handleRequeue(rowIndex: number) {
     setRequeuing(rowIndex);
@@ -721,6 +767,7 @@ function QueueTable({
             <th className="py-2 pr-3 w-24">Status</th>
             <th className="py-2 pr-3">Page Type → Route</th>
             <th className="py-2 pr-3">Primary Keyword</th>
+            {showTerms && <th className="py-2 pr-3">Categories / Tags</th>}
             <th className="py-2 pr-3 w-20">Doc</th>
           </tr>
         </thead>
@@ -746,6 +793,15 @@ function QueueTable({
                   <code className="text-xs text-white/60">{route}</code>
                 </td>
                 <td className="py-2 pr-3 text-white/80">{row.primaryKeyword || '—'}</td>
+                {showTerms && (
+                  <td className="py-2 pr-3">
+                    <TermChips
+                      categories={row.categories}
+                      tags={row.tags}
+                      route={route}
+                    />
+                  </td>
+                )}
                 <td className="py-2 pr-3">
                   {row.contentLink && /^https?:\/\//i.test(row.contentLink) ? (
                     <a
