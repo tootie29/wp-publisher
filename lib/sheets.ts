@@ -182,6 +182,43 @@ export async function setCellValue(
   });
 }
 
+// Write many cells in one API call. Used by the URL sync, which would otherwise
+// fire one request per published row.
+export async function setCellValues(
+  project: ProjectConfig,
+  updates: { columnLetter: string; rowIndex: number; value: string }[]
+): Promise<void> {
+  if (!updates.length) return;
+  const api = await sheets();
+  await api.spreadsheets.values.batchUpdate({
+    spreadsheetId: project.sheet.sheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: updates.map((u) => ({
+        range: range(project.sheet.tabName, u.columnLetter, u.rowIndex),
+        values: [[u.value]],
+      })),
+    },
+  });
+}
+
+// Read the current text of one column, keyed by 1-based row. Lets callers see
+// what's already in a cell before overwriting it.
+export async function readColumn(
+  project: ProjectConfig,
+  columnLetter: string
+): Promise<Map<number, string>> {
+  const rows = await fetchAllCells(project);
+  const idx = colToIdx(columnLetter);
+  const out = new Map<number, string>();
+  for (let i = 0; i < rows.length; i++) {
+    const cell = rows[i]?.[idx];
+    const text = (cell?.hyperlink || cell?.text || '').trim();
+    if (text) out.set(i + 1, text);
+  }
+  return out;
+}
+
 export async function setRowStatus(
   project: ProjectConfig,
   rowIndex: number,

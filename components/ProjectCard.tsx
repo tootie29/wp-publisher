@@ -1047,6 +1047,38 @@ function DraftsTable({
   const [activeRow, setActiveRow] = useState<number | null>(null);
   const [pubError, setPubError] = useState<{ row: number; msg: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  // Separate from pubError, which only renders inside a row — a sync failure
+  // has no row to attach to and would otherwise fail silently.
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  // Reconcile the sheet's URL column with WordPress: fill in permalinks for
+  // anything that has since gone live, and clear ?p= placeholders that an
+  // earlier bug wrote as though they were published URLs.
+  async function handleSyncUrls() {
+    setSyncing(true);
+    setSyncError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/sync-urls`, { method: 'POST' });
+      const data = (await res.json()) as {
+        ok?: boolean; error?: string; column?: string;
+        checked?: number; filled?: number; cleared?: number; scheduled?: number; unknown?: number;
+      };
+      if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const bits = [`Checked ${data.checked} published row${data.checked === 1 ? '' : 's'} against WordPress.`];
+      if (data.filled) bits.push(`${data.filled} URL${data.filled === 1 ? '' : 's'} written to column ${data.column}.`);
+      if (data.cleared) bits.push(`${data.cleared} placeholder link${data.cleared === 1 ? '' : 's'} cleared.`);
+      if (data.scheduled) bits.push(`${data.scheduled} still scheduled — no URL until ${data.scheduled === 1 ? 'it goes' : 'they go'} live.`);
+      if (!data.filled && !data.cleared) bits.push('Nothing needed changing.');
+      setNotice(bits.join(' '));
+      await onChange();
+    } catch (e) {
+      setSyncError((e as Error).message);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   function toggleRow(rowIndex: number) {
     setSelected((prev) => {
@@ -1074,6 +1106,8 @@ function DraftsTable({
     error?: string;
     wroteToSheet?: boolean;
     column?: string;
+    scheduled?: boolean;
+    message?: string;
   }> {
     const res = await fetch(`/api/projects/${projectId}/publish-draft`, {
       method: 'POST',
@@ -1095,8 +1129,12 @@ function DraftsTable({
     try {
       const data = await publishOne(p.rowIndex);
       if (!data.ok) throw new Error(data.error || 'Publish failed');
+      // A blog whose spacing date is still ahead comes back scheduled rather
+      // than live — report that instead of implying it went out.
       setNotice(
-        data.wroteToSheet
+        data.message
+          ? `"${p.title}" — ${data.message}`
+          : data.wroteToSheet
           ? `Published "${p.title}" — live URL written to column ${data.column}.`
           : `Published "${p.title}". No Published-URL or Target-URL column is mapped, so the link wasn't written to the sheet — set one in Edit project to enable that.`
       );
@@ -1124,14 +1162,21 @@ function DraftsTable({
     let ok = 0;
     let failed = 0;
     let noCol = 0;
+    let scheduled = 0;
     // Sequential — keeps it gentle on the WP site and gives clear per-row progress.
     for (const rowIndex of rows) {
       setActiveRow(rowIndex);
       try {
         const data = await publishOne(rowIndex);
         if (data.ok) {
-          ok += 1;
-          if (!data.wroteToSheet) noCol += 1;
+          // Scheduled ≠ published: a blog still ahead of its spacing date gets
+          // queued by WordPress and has no URL yet. Counting it as published
+          // would be a lie.
+          if (data.scheduled) scheduled += 1;
+          else {
+            ok += 1;
+            if (!data.wroteToSheet) noCol += 1;
+          }
         } else {
           failed += 1;
         }
@@ -1142,6 +1187,9 @@ function DraftsTable({
     setActiveRow(null);
     setSelected(new Set());
     let msg = `Published ${ok} of ${rows.length}.`;
+    if (scheduled) {
+      msg += ` ${scheduled} ${scheduled === 1 ? 'was' : 'were'} scheduled for a later date by the blog interval, so ${scheduled === 1 ? 'it has' : 'they have'} no URL yet — run "Sync sheet URLs" once ${scheduled === 1 ? 'it goes' : 'they go'} live.`;
+    }
     if (failed) msg += ` ${failed} failed.`;
     if (noCol && ok) msg += ` No URL column mapped — links weren't written to the sheet.`;
     setNotice(msg);
@@ -1228,6 +1276,25 @@ function DraftsTable({
         placeholder="Search drafts by title, SEO fields, keyword, category, tag, page type, or row #…"
         resultLabel={filtered && q && drafts ? `${filtered.length} of ${drafts.length}` : undefined}
       />
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          onClick={handleSyncUrls}
+          disabled={syncing || busy}
+          className="text-xs px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 border border-white/15 text-white/70 inline-flex items-center gap-1.5 disabled:opacity-40"
+          title="Check every published row against WordPress: write in the real URL for anything now live, and clear leftover ?p= placeholder links."
+        >
+          {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Sync sheet URLs
+        </button>
+        <span className="text-[11px] text-white/35">
+          Fills in URLs for scheduled blogs once they go live, and clears placeholder links.
+        </span>
+      </div>
+      {syncError && (
+        <div className="text-xs text-red-300/90 bg-red-500/10 border border-red-500/20 rounded px-3 py-2 mb-3 flex items-start gap-2">
+          <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {syncError}
+        </div>
+      )}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-3">
           <button

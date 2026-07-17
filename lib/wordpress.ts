@@ -533,6 +533,43 @@ export async function publishPost(
   };
 }
 
+// Current status + link for a batch of posts/pages. One request per route
+// (?include=), rather than one per item. context=edit so `status` is present.
+export async function fetchPostStates(
+  project: ProjectConfig,
+  items: { wpId: number; route: PageTypeRoute }[]
+): Promise<Map<number, { status: string; link: string }>> {
+  const base = project.wordpress.baseUrl.replace(/\/+$/, '');
+  const out = new Map<number, { status: string; link: string }>();
+
+  async function batch(route: PageTypeRoute, ids: number[]) {
+    if (!ids.length) return;
+    const path = route === 'post' ? 'posts' : 'pages';
+    // WP caps per_page at 100; chunk so large histories don't silently truncate.
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      try {
+        const res = await fetch(
+          `${base}/wp-json/wp/v2/${path}?include=${chunk.join(',')}&per_page=${chunk.length}` +
+            `&status=any&context=edit&_fields=id,status,link`,
+          { headers: { Authorization: authHeader(project) }, cache: 'no-store' }
+        );
+        if (!res.ok) continue;
+        const list = (await res.json()) as { id: number; status: string; link: string }[];
+        for (const it of list) out.set(it.id, { status: it.status, link: it.link });
+      } catch {
+        // Leave those ids absent — the caller treats "unknown" as "don't touch".
+      }
+    }
+  }
+
+  await Promise.all([
+    batch('post', items.filter((i) => i.route === 'post').map((i) => i.wpId)),
+    batch('page', items.filter((i) => i.route === 'page').map((i) => i.wpId)),
+  ]);
+  return out;
+}
+
 // Upload an image (raw bytes) to the WordPress media library. Returns the new
 // media id and its public source URL so callers can rewrite <img src> to point
 // at the WP-hosted copy instead of the (often expiring) original.
