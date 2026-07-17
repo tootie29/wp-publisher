@@ -65,6 +65,63 @@ interface PublishedItem {
   route: 'post' | 'page'; primaryKeyword: string;
   status: 'success' | 'partial';
   currentStatus?: 'draft' | 'publish' | 'pending' | 'private' | 'future' | 'trash' | 'unknown';
+  // Live WP fields, editable from the Drafts tab before the item goes live.
+  metaTitle?: string;
+  metaDescription?: string;
+  keyword?: string;
+  categories?: string[];
+  tags?: string[];
+}
+
+/* --- Shared WP item editing (Drafts + Published tabs use the same endpoint) --- */
+
+// Both tabs edit the same WordPress objects — a draft and a published post
+// differ only in status — so the SEO/taxonomy writes go through one PATCH.
+async function patchWpItem(
+  projectId: string,
+  id: number,
+  body: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`/api/projects/${projectId}/wp-published/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
+    ok?: boolean;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function saveSeoField(
+  projectId: string,
+  id: number,
+  type: 'post' | 'page',
+  field: EditableField,
+  next: string
+): Promise<{ metaTitle?: string; metaDescription?: string; keyword?: string }> {
+  const data = await patchWpItem(projectId, id, { type, [field]: next });
+  return {
+    metaTitle: typeof data.metaTitle === 'string' ? data.metaTitle : undefined,
+    metaDescription:
+      typeof data.metaDescription === 'string' ? data.metaDescription : undefined,
+    keyword: typeof data.keyword === 'string' ? data.keyword : undefined,
+  };
+}
+
+async function saveTermList(
+  projectId: string,
+  id: number,
+  type: 'post' | 'page',
+  taxonomy: 'categories' | 'tags',
+  next: string[]
+): Promise<string[]> {
+  const data = await patchWpItem(projectId, id, { type, [taxonomy]: next });
+  // Trust the server's echo — it carries WordPress's canonical spelling.
+  const echoed = data[taxonomy];
+  return Array.isArray(echoed) ? (echoed as string[]) : next;
 }
 
 interface RunSummary {
@@ -653,7 +710,24 @@ export default function ProjectCard({ project: initialProject }: { project: Publ
       {/* Tab content */}
       <div className="px-6 py-4">
         {tab === 'queue' && <QueueTable queue={queue} alreadyPublished={alreadyPublished} projectId={project.id} onChange={refresh} project={project} termSupport={terms.supports} liveRow={amCurrentProject ? live?.rowIndex ?? null : null} livePhase={amCurrentProject ? live?.phase ?? null : null} />}
-        {tab === 'drafts' && <DraftsTable published={published} projectId={project.id} onChange={refresh} />}
+        {tab === 'drafts' && (
+          <DraftsTable
+            published={published}
+            projectId={project.id}
+            onChange={refresh}
+            terms={terms}
+            onTermsChanged={loadTerms}
+            onItemUpdated={(updated) => {
+              setPublished((curr) =>
+                (curr || []).map((row) =>
+                  row.rowIndex === updated.rowIndex && row.wpId === updated.wpId
+                    ? { ...row, ...updated }
+                    : row
+                )
+              );
+            }}
+          />
+        )}
         {tab === 'published' && (
           <WpPublishedTable
             projectId={project.id}
@@ -937,12 +1011,37 @@ function DraftsTable({
   published,
   projectId,
   onChange,
+  terms,
+  onTermsChanged,
+  onItemUpdated,
 }: {
   published: PublishedItem[] | null;
   projectId: string;
   onChange: () => Promise<void> | void;
+  terms: SiteTerms;
+  onTermsChanged: () => void;
+  onItemUpdated: (row: PublishedItem) => void;
 }) {
   const [q, setQ] = useState('');
+
+  // A draft is an ordinary WP object, so the same PATCH that edits a published
+  // item edits it here — letting the team get the SEO fields and terms right
+  // before anything goes live.
+  async function saveField(p: PublishedItem, field: EditableField, next: string) {
+    const saved = await saveSeoField(projectId, p.wpId, p.route, field, next);
+    onItemUpdated({
+      ...p,
+      metaTitle: saved.metaTitle ?? p.metaTitle,
+      metaDescription: saved.metaDescription ?? p.metaDescription,
+      keyword: saved.keyword ?? p.keyword,
+    });
+  }
+
+  async function saveTerms(p: PublishedItem, taxonomy: 'categories' | 'tags', next: string[]) {
+    const saved = await saveTermList(projectId, p.wpId, p.route, taxonomy, next);
+    onItemUpdated({ ...p, [taxonomy]: saved });
+    onTermsChanged();
+  }
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [activeRow, setActiveRow] = useState<number | null>(null);
@@ -1083,6 +1182,11 @@ function DraftsTable({
       (p.primaryKeyword || '').toLowerCase().includes(needle) ||
       (p.pageType || '').toLowerCase().includes(needle) ||
       (p.route || '').toLowerCase().includes(needle) ||
+      (p.metaTitle || '').toLowerCase().includes(needle) ||
+      (p.metaDescription || '').toLowerCase().includes(needle) ||
+      (p.keyword || '').toLowerCase().includes(needle) ||
+      (p.categories || []).some((c) => c.toLowerCase().includes(needle)) ||
+      (p.tags || []).some((t) => t.toLowerCase().includes(needle)) ||
       String(p.rowIndex).includes(needle)
     );
   }, [drafts, q]);
@@ -1121,7 +1225,7 @@ function DraftsTable({
       <TableSearch
         value={q}
         onChange={setQ}
-        placeholder="Search drafts by title, keyword, page type, or row #…"
+        placeholder="Search drafts by title, SEO fields, keyword, category, tag, page type, or row #…"
         resultLabel={filtered && q && drafts ? `${filtered.length} of ${drafts.length}` : undefined}
       />
       {selected.size > 0 && (
@@ -1168,10 +1272,13 @@ function DraftsTable({
         <div className="text-white/40 text-xs py-6 text-center">No drafts match "{q}".</div>
       ) : (
       <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      {/* Same width discipline as the Published table: table-fixed needs every
+          column declared and summing to 100%, with a min-width so the wrapper
+          scrolls rather than crushing cells on a narrow card. */}
+      <table className="w-full text-sm table-fixed min-w-[1500px]">
         <thead className="text-left text-white/40 border-b border-white/10">
           <tr>
-            <th className="py-2 pr-3 w-8">
+            <th className="py-2 pr-3 w-[3%]">
               <input
                 type="checkbox"
                 aria-label="Select all drafts"
@@ -1187,11 +1294,16 @@ function DraftsTable({
                 onChange={toggleAll}
               />
             </th>
-            <th className="py-2 pr-3 w-40">When</th>
-            <th className="py-2 pr-3 w-14">Row</th>
-            <th className="py-2 pr-3 w-20">Route</th>
-            <th className="py-2 pr-3">Title</th>
-            <th className="py-2 pr-3 w-48">Actions</th>
+            <th className="py-2 pr-3 w-[6%]">When</th>
+            <th className="py-2 pr-3 w-[4%]">Row</th>
+            <th className="py-2 pr-3 w-[5%]">Route</th>
+            <th className="py-2 pr-3 w-[13%]">Title</th>
+            <th className="py-2 pr-3 w-[13%]">SEO Title</th>
+            <th className="py-2 pr-3 w-[16%]">Meta Description</th>
+            <th className="py-2 pr-3 w-[10%]">Keyword</th>
+            <th className="py-2 pr-3 w-[11%]">Categories</th>
+            <th className="py-2 pr-3 w-[11%]">Tags</th>
+            <th className="py-2 pr-3 w-[8%]">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1219,10 +1331,66 @@ function DraftsTable({
                 )}
               </td>
               <td className="py-2 pr-3">
-                <div className="text-white/90 line-clamp-1">{p.title}</div>
+                <div className="text-white/90 line-clamp-2 break-words" title={p.title}>{p.title}</div>
                 {p.primaryKeyword && p.primaryKeyword !== p.title && (
-                  <div className="text-xs text-white/40">{p.primaryKeyword}</div>
+                  <div className="text-xs text-white/40 line-clamp-1">{p.primaryKeyword}</div>
                 )}
+              </td>
+              <td className="py-2 pr-3">
+                <EditableSeoCell
+                  value={p.metaTitle || ''}
+                  field="metaTitle"
+                  placeholder="Add SEO title"
+                  onSave={(next) => saveField(p, 'metaTitle', next)}
+                  renderDisplay={(v) => <SeoDisplay value={v} kind="title" />}
+                />
+              </td>
+              <td className="py-2 pr-3">
+                <EditableSeoCell
+                  value={p.metaDescription || ''}
+                  field="metaDescription"
+                  multiline
+                  placeholder="Add meta description"
+                  onSave={(next) => saveField(p, 'metaDescription', next)}
+                  renderDisplay={(v) => <SeoDisplay value={v} kind="desc" />}
+                />
+              </td>
+              <td className="py-2 pr-3 text-xs">
+                <EditableSeoCell
+                  value={p.keyword || ''}
+                  field="keyword"
+                  placeholder="Add focus keyphrase"
+                  onSave={(next) => saveField(p, 'keyword', next)}
+                  renderDisplay={(v) =>
+                    v ? (
+                      <span className="text-emerald-300/90 line-clamp-2 break-words" title={v}>{v}</span>
+                    ) : (
+                      <span className="text-white/25">— click to add</span>
+                    )
+                  }
+                />
+              </td>
+              <td className="py-2 pr-3">
+                <EditableTermsCell
+                  values={p.categories || []}
+                  suggestions={terms.categories}
+                  label="category"
+                  tone="category"
+                  disabled={!terms.supports[p.route]}
+                  disabledHint={`This site's ${p.route}s have no categories registered. Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`}
+                  onSave={(next) => saveTerms(p, 'categories', next)}
+                />
+              </td>
+              <td className="py-2 pr-3">
+                <EditableTermsCell
+                  values={p.tags || []}
+                  suggestions={terms.tags}
+                  label="tag"
+                  tone="tag"
+                  disabled={!terms.supports[p.route]}
+                  disabledHint={`This site's ${p.route}s have no tags registered. Install or update the wp-publisher-yoast-rest mu-plugin to enable them.`}
+                  onSave={(next) => saveTerms(p, 'tags', next)}
+                />
               </td>
               <td className="py-2 pr-3">
                 <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -1316,6 +1484,27 @@ function SeoScoreChip({ count, status }: { count: number; status: SeoStatus }) {
     >
       {count}
     </span>
+  );
+}
+
+// Read-only rendering of an SEO title / meta description, colour-coded by
+// length with its character-count chip. Shared by the Drafts and Published
+// tabs so a field looks and scores identically in both.
+function SeoDisplay({ value, kind }: { value: string; kind: 'title' | 'desc' }) {
+  if (!value) return <span className="text-white/25 text-xs">— click to add</span>;
+  const s = scoreSeo(value, kind);
+  const tone =
+    s.status === 'good' ? 'text-emerald-300' : s.status === 'mid' ? 'text-amber-300' : 'text-red-300';
+  return (
+    <div className="space-y-1">
+      <div
+        className={`${tone} text-xs break-words ${kind === 'desc' ? 'line-clamp-3' : 'line-clamp-2'}`}
+        title={value}
+      >
+        {value}
+      </div>
+      <SeoScoreChip count={s.count} status={s.status} />
+    </div>
   );
 }
 
@@ -1584,45 +1773,18 @@ function WpPublishedTable({
     taxonomy: 'categories' | 'tags',
     next: string[]
   ) {
-    const res = await fetch(`/api/projects/${projectId}/wp-published/${it.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: it.type, [taxonomy]: next }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      error?: string;
-      categories?: string[];
-      tags?: string[];
-    };
-    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    // Trust the server's echo — it carries WordPress's canonical spelling.
-    onItemUpdated({ ...it, [taxonomy]: data[taxonomy] ?? next });
+    const saved = await saveTermList(projectId, it.id, it.type, taxonomy, next);
+    onItemUpdated({ ...it, [taxonomy]: saved });
     onTermsChanged();
   }
 
   async function saveField(it: WpPublishedRow, field: EditableField, next: string) {
-    const res = await fetch(`/api/projects/${projectId}/wp-published/${it.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: it.type, [field]: next }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      error?: string;
-      metaTitle?: string;
-      metaDescription?: string;
-      keyword?: string;
-    };
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
+    const saved = await saveSeoField(projectId, it.id, it.type, field, next);
     onItemUpdated({
       ...it,
-      metaTitle: typeof data.metaTitle === 'string' ? data.metaTitle : it.metaTitle,
-      metaDescription:
-        typeof data.metaDescription === 'string' ? data.metaDescription : it.metaDescription,
-      keyword: typeof data.keyword === 'string' ? data.keyword : it.keyword,
+      metaTitle: saved.metaTitle ?? it.metaTitle,
+      metaDescription: saved.metaDescription ?? it.metaDescription,
+      keyword: saved.keyword ?? it.keyword,
     });
   }
   const filtered = useMemo(() => {
@@ -1718,24 +1880,7 @@ function WpPublishedTable({
                   field="metaTitle"
                   placeholder="Add SEO title"
                   onSave={(next) => saveField(it, 'metaTitle', next)}
-                  renderDisplay={(v) => {
-                    if (!v) return <span className="text-white/25 text-xs">— click to add</span>;
-                    const s = scoreSeo(v, 'title');
-                    const tone =
-                      s.status === 'good'
-                        ? 'text-emerald-300'
-                        : s.status === 'mid'
-                        ? 'text-amber-300'
-                        : 'text-red-300';
-                    return (
-                      <div className="space-y-1">
-                        <div className={`${tone} text-xs line-clamp-2 break-words`} title={v}>
-                          {v}
-                        </div>
-                        <SeoScoreChip count={s.count} status={s.status} />
-                      </div>
-                    );
-                  }}
+                  renderDisplay={(v) => <SeoDisplay value={v} kind="title" />}
                 />
               </td>
               <td className="py-2 pr-3">
@@ -1745,24 +1890,7 @@ function WpPublishedTable({
                   multiline
                   placeholder="Add meta description"
                   onSave={(next) => saveField(it, 'metaDescription', next)}
-                  renderDisplay={(v) => {
-                    if (!v) return <span className="text-white/25 text-xs">— click to add</span>;
-                    const s = scoreSeo(v, 'desc');
-                    const tone =
-                      s.status === 'good'
-                        ? 'text-emerald-300'
-                        : s.status === 'mid'
-                        ? 'text-amber-300'
-                        : 'text-red-300';
-                    return (
-                      <div className="space-y-1">
-                        <div className={`${tone} text-xs line-clamp-3 break-words`} title={v}>
-                          {v}
-                        </div>
-                        <SeoScoreChip count={s.count} status={s.status} />
-                      </div>
-                    );
-                  }}
+                  renderDisplay={(v) => <SeoDisplay value={v} kind="desc" />}
                 />
               </td>
               <td className="py-2 pr-3 text-xs">
